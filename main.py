@@ -1,28 +1,41 @@
+"""
+FastAPI application entry point.
+
+Startup tasks:
+  1. Attach MongoDB singleton to app.state.mongo.
+  2. Create TTL index on session_state.updated_at (idempotent, 24 h expiry).
+     This ensures stale sessions are automatically purged and do not
+     survive server restarts to cause phantom dataset lookups.
+
+No app.state.ACTIVE_DATASET or ACTIVE_DATASETS globals — session state
+is keyed by the session_id UUID from the X-Session-ID request header.
+"""
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from routes.chat_routes import router as chat_router
 from routes.upload import router as upload_router
-from mongo_client import MongoDBClient
+from mongo_client import mongo_client as mongo
 from dotenv import load_dotenv
 
-# Load Environment Variables
 load_dotenv()
 
-app = FastAPI(title="AI Chatbot with MongoDB")
 
-# MongoDB Instance
-mongo = MongoDBClient()
-app.state.mongo = mongo
-
-# Initialize active dataset tracker
-app.state.ACTIVE_DATASET = None
-
-# Shutdown Event
-@app.on_event("shutdown")
-def shutdown_db():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- startup ---
+    app.state.mongo = mongo
+    mongo.ensure_ttl_index()
+    yield
+    # --- shutdown ---
     mongo.close()
 
-# CORS Middleware
+
+app = FastAPI(title="AI Chatbot with MongoDB", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,11 +44,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routes with prefix (IMPORTANT)
 app.include_router(chat_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
 
-# Health Check
+
 @app.get("/")
 def home():
     return {"message": "AI Chatbot Running 🚀"}

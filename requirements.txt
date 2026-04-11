@@ -10,3 +10,5 @@ numpy
 openpyxl
 python-multipart
 langchain
+langchain-core
+rapidfuzz
