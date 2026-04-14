@@ -10,9 +10,35 @@ are pre-computed in the dataset or must be derived.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Currency symbols in priority order — prefer whichever appears in the col name.
+_CURRENCY_SYMBOLS = ("₹", "$", "€", "£", "¥", "₩", "₺")
+
+def _resolve_unit_display(unit: Optional[str], col_name: str) -> Optional[str]:
+    """
+    Convert generic schema unit type to a UI-friendly display string.
+
+    "currency"      → extract symbol from col_name (₹, $, …) → default "₹"
+    "currency_rate" → same extraction → default "₹"
+    "percentage"    → "%"
+    anything else   → pass through unchanged
+    """
+    if unit in ("currency", "currency_rate"):
+        for sym in _CURRENCY_SYMBOLS:
+            if sym in col_name:
+                return sym
+        # Fallback: scan column name for ISO codes like INR, USD
+        m = re.search(r'\b(INR|USD|EUR|GBP|JPY|KRW)\b', col_name, re.IGNORECASE)
+        if m:
+            return m.group(0).upper()
+        return "₹"   # default for this application's context
+    if unit == "percentage":
+        return "%"
+    return unit
 
 # ---------------------------------------------------------------------------
 # Derivable metrics — these can be computed from other columns even when
@@ -160,7 +186,7 @@ def resolve(
             "primary_col":    direct,
             "role":           canonical,
             "is_summable":    meta.get("is_summable", True),
-            "unit":           meta.get("unit"),
+            "unit":           _resolve_unit_display(meta.get("unit"), direct),
             "is_precomputed": meta.get("dtype") == "pre_computed_ratio",
             "derivable":      None,
             "lead_cols":      {},
@@ -180,7 +206,7 @@ def resolve(
                 "primary_col":    direct_cpu,
                 "role":           "cost_per_unit",
                 "is_summable":    meta.get("is_summable", False),
-                "unit":           meta.get("unit", "currency_rate"),
+                "unit":           _resolve_unit_display(meta.get("unit", "currency_rate"), direct_cpu),
                 "is_precomputed": False,
                 "derivable":      None,
                 "lead_cols":      {},
@@ -290,11 +316,13 @@ def _resolve_derivable(canonical: str, columns: Dict) -> Dict:
             "warning":        f"Cannot compute '{canonical}': missing columns for {missing_roles}",
         }
 
+    # For derived metrics, use a representative required column name for symbol extraction
+    any_col = next(iter(required_cols.values()), "")
     return {
         "primary_col":    None,
         "role":           canonical,
         "is_summable":    derivable_cfg["summable"],
-        "unit":           derivable_cfg["unit"],
+        "unit":           _resolve_unit_display(derivable_cfg["unit"], any_col),
         "is_precomputed": False,
         "derivable": {
             "required_cols": required_cols,

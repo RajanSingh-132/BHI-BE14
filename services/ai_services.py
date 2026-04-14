@@ -38,6 +38,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+import anthropic as _anthropic_sdk
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as _genai_types
@@ -54,39 +55,58 @@ from config.display_config import get_fields_for_prompt
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    raise ValueError("[AI_SERVICES] GEMINI_API_KEY is not set")
+# ── Model selection ───────────────────────────────────────────────────────────
+# Set LLM_MODEL in .env or as an env var. No code change needed to switch.
+#
+# Google GenAI (default):
+#   gemini-2.5-flash    — best JSON reliability, 1M context, free tier 5 RPM
+#   gemma-4-31b-it      — open-weight, 128K context, ~25s latency
+#   gemini-2.0-flash    — previous gen
+#
+# Anthropic (prefix: claude-):
+#   claude-sonnet-4-5   — balanced quality/speed, recommended
+#   claude-haiku-4-5    — fastest, cheapest
+#   claude-opus-4-5     — highest quality, slowest
+#
+# Examples (.env):
+#   LLM_MODEL=gemma-4-31b-it
+#   LLM_MODEL=claude-sonnet-4-5
+_LLM_MODEL  = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+_IS_CLAUDE  = _LLM_MODEL.startswith("claude-")
 
-# Model selection — switch via env var, no code change required.
-# Supported values (Google GenAI API):
-#   gemini-2.5-flash        — default, best JSON reliability, 1M context
-#   gemma-4-31b-it          — Gemma 4 31B instruction-tuned, 128K context
-#   gemini-2.0-flash        — previous gen Flash
-# Example: LLM_MODEL=gemma-4-31b-it uvicorn main:app
-_LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+# ── Client initialisation ─────────────────────────────────────────────────────
+_GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY")
+_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-_gemini    = genai.Client(api_key=API_KEY)
+if _IS_CLAUDE:
+    if not _ANTHROPIC_API_KEY:
+        raise ValueError("[AI_SERVICES] ANTHROPIC_API_KEY is not set (required for claude-* models)")
+    _anthropic = _anthropic_sdk.Anthropic(api_key=_ANTHROPIC_API_KEY)
+    _gemini    = None
+else:
+    if not _GEMINI_API_KEY:
+        raise ValueError("[AI_SERVICES] GEMINI_API_KEY is not set")
+    _gemini    = genai.Client(api_key=_GEMINI_API_KEY)
+    _anthropic = None
+
 _retriever = RAGRetriever()
-
-logger.info(f"[AI_SERVICES] LLM model = {_LLM_MODEL!r}")
+logger.info(f"[AI_SERVICES] LLM model = {_LLM_MODEL!r} ({'Anthropic' if _IS_CLAUDE else 'Google GenAI'})")
 
 # ── Retry config ──────────────────────────────────────────────────────────────
-# 2 total attempts per call (1 initial + 1 retry).
-# Keeping this low is the primary defence against quota exhaustion:
-# worst case is 2 (intent) + 2 (analysis) = 4 Gemini calls per request.
 _GEMINI_MAX_RETRIES = 2
-_GEMINI_RETRY_BASE  = 4.0   # fallback sleep seconds when retryDelay is absent
+_GEMINI_RETRY_BASE  = 4.0   # fallback sleep seconds when retryDelay absent
 
-# Disable Automatic Function Calling (AFC) globally.
-# The google-genai SDK enables AFC by default for Gemini 2.5 models, which can
-# silently make up to 10 additional API calls per generate_content invocation.
-# We do not use tools, so AFC must be disabled to prevent unexpected API usage.
+# Disable AFC globally — Google SDK enables it by default for Gemini 2.5,
+# causing up to 10 silent extra calls per invocation. We don't use tools.
 _GEMINI_CONFIG = _genai_types.GenerateContentConfig(
     automatic_function_calling=_genai_types.AutomaticFunctionCallingConfig(
         disable=True
     )
 )
+
+# Anthropic: max tokens to generate per call.
+# 4096 is enough for our structured JSON responses.
+_ANTHROPIC_MAX_TOKENS = 4096
 
 # Errors that are safe to retry (transient server-side issues)
 _RETRYABLE_CODES = frozenset(["429", "500", "502", "503", "504"])
@@ -118,8 +138,34 @@ def _parse_retry_delay(err_str: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# Gemini call wrapper — retry + backoff + per-request transparent logging
+# Unified LLM call wrapper — routes to Anthropic or Google GenAI
 # ---------------------------------------------------------------------------
+
+def _call_anthropic(prompt: str) -> str:
+    """
+    Single Anthropic API call. No retry logic here — handled by _gemini_generate.
+    Uses claude-* model set in _LLM_MODEL.
+    """
+    msg = _anthropic.messages.create(
+        model=_LLM_MODEL,
+        max_tokens=_ANTHROPIC_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return msg.content[0].text
+
+
+def _call_google(prompt: str) -> str:
+    """
+    Single Google GenAI call (Gemini or Gemma). No retry logic here.
+    AFC is disabled to prevent hidden tool-call rounds.
+    """
+    response = _gemini.models.generate_content(
+        model=_LLM_MODEL,
+        contents=prompt,
+        config=_GEMINI_CONFIG,
+    )
+    return response.text if hasattr(response, "text") else str(response)
+
 
 def _gemini_generate(
     prompt: str,
@@ -127,18 +173,17 @@ def _gemini_generate(
     extra:  str = "",
 ) -> Optional[str]:
     """
-    Call Gemini with up to _GEMINI_MAX_RETRIES attempts.
+    Unified LLM call with retry + backoff + per-request transparent logging.
+    Routes to Anthropic (claude-*) or Google GenAI based on _LLM_MODEL.
 
-    Logging (one line per call attempt, one summary at completion):
-      [LLM_CALL #n] purpose=INTENT | model=gemini-2.5-flash | prompt_chars=1,234
+    Logging:
+      [LLM_CALL #n] purpose=INTENT | model=claude-sonnet-4-5 | prompt_chars=1,234
       [LLM_CALL #n] purpose=INTENT | status=success | waited=0.0s
-      — or —
-      [LLM_CALL #n] purpose=INTENT | status=FAILED | waited=39.0s | error=…
 
-    Key behaviour:
-    - AFC is disabled → no hidden tool-call rounds.
-    - 429 retryDelay is parsed and used as the actual sleep duration.
-    - tracker.gemini_hit() counted only on success (global legacy counter).
+    Retry behaviour:
+    - 429 retryDelay parsed from Google response body and used as sleep duration.
+    - Anthropic 429s: retries after _GEMINI_RETRY_BASE seconds.
+    - DNS / connection errors: not retried (is_retryable=False → immediate fail).
     - Returns text string on success, None on permanent failure.
     """
     stats = get_stats()
@@ -148,12 +193,7 @@ def _gemini_generate(
 
     for attempt in range(1, _GEMINI_MAX_RETRIES + 1):
         try:
-            response = _gemini.models.generate_content(
-                model=_LLM_MODEL,
-                contents=prompt,
-                config=_GEMINI_CONFIG,
-            )
-            text = response.text if hasattr(response, "text") else str(response)
+            text = _call_anthropic(prompt) if _IS_CLAUDE else _call_google(prompt)
             tracker.gemini_hit()
             stats.complete(rec, success=True, wait_s=total_wait)
             return text
@@ -427,15 +467,16 @@ def _analyze_results_multi(
         if start == -1 or end <= 0:
             return _fallback_response_multi(dataset_results, query)
 
-        parsed = json.loads(raw[start:end])
-        answer = _clean_text(parsed.get("answer", ""))
-        kpis   = parsed.get("kpis", [])
-        charts = _deduplicate_charts(parsed.get("charts", []))
+        parsed      = json.loads(raw[start:end])
+        answer      = _clean_text(parsed.get("answer", ""))
+        kpis        = parsed.get("kpis", [])
+        charts      = _deduplicate_charts(parsed.get("charts", []))
+        ai_insights = parsed.get("ai_insights") or None
 
         if not answer:
             return _fallback_response_multi(dataset_results, query)
 
-        return {"answer": answer, "kpis": kpis, "charts": charts}
+        return {"answer": answer, "kpis": kpis, "charts": charts, "ai_insights": ai_insights}
 
     except json.JSONDecodeError as e:
         logger.warning(f"[ANALYSIS] JSON parse failed: {e}")
@@ -473,15 +514,16 @@ def _analyze_results(
         if start == -1 or end <= 0:
             return _fallback_response(calc_result, query)
 
-        parsed = json.loads(raw[start:end])
-        answer = _clean_text(parsed.get("answer", ""))
-        kpis   = parsed.get("kpis", [])
-        charts = _deduplicate_charts(parsed.get("charts", []))
+        parsed      = json.loads(raw[start:end])
+        answer      = _clean_text(parsed.get("answer", ""))
+        kpis        = parsed.get("kpis", [])
+        charts      = _deduplicate_charts(parsed.get("charts", []))
+        ai_insights = parsed.get("ai_insights") or None
 
         if not answer:
             return _fallback_response(calc_result, query)
 
-        return {"answer": answer, "kpis": kpis, "charts": charts}
+        return {"answer": answer, "kpis": kpis, "charts": charts, "ai_insights": ai_insights}
 
     except json.JSONDecodeError as e:
         logger.warning(f"[ANALYSIS] JSON parse failed: {e}")
@@ -496,21 +538,90 @@ def _analyze_results(
 # ---------------------------------------------------------------------------
 
 def _fallback_response(calc_result: Dict, query: str) -> Dict:
-    result  = calc_result.get("result")
-    metric  = calc_result.get("metric", "")
-    unit    = calc_result.get("unit", "")
-    formula = calc_result.get("formula", "")
+    """
+    Fallback when the LLM analysis call fails.
+    Produces a readable, structured response using the computation result
+    and record_details — no LLM required.
+    """
+    result         = calc_result.get("result")
+    metric         = calc_result.get("metric", "").replace("_", " ").title()
+    unit           = calc_result.get("unit", "")
+    formula        = calc_result.get("formula", "")
+    record_details = calc_result.get("record_details") or {}
+    row_count      = calc_result.get("row_count", 0)
+
+    unit_str   = unit or ""
+    unit_pfx   = unit_str if unit_str in ("₹", "$", "€", "£") else ""
+    unit_sfx   = unit_str if unit_str not in ("₹", "$", "€", "£") else ""
+    value_str  = f"{unit_pfx}{result:,.2f}{(' ' + unit_sfx).rstrip()}" if result is not None else "N/A"
 
     if result is not None:
-        answer = (
-            f"<p><strong>Result:</strong> {result} {unit}</p>"
-            f"<p><strong>Formula:</strong> {formula}</p>"
+        # -- Paragraph 1: direct answer --
+        if record_details:
+            # Extract the most meaningful identifier (prefer name/company over ID)
+            primary_label = next(
+                (v for k, v in record_details.items()
+                 if any(p in k.lower() for p in ("name", "company", "client"))),
+                next(iter(record_details.values()), "")
+            )
+            p1 = (
+                f"<p>Based on <strong>{row_count}</strong> records, the answer is "
+                f"<strong>{value_str}</strong> — corresponding to "
+                f"<strong>{primary_label}</strong>.</p>"
+            )
+        else:
+            p1 = (
+                f"<p>Across <strong>{row_count}</strong> records, the result for "
+                f"<strong>{metric}</strong> is <strong>{value_str}</strong>.</p>"
+            )
+
+        # -- Paragraph 2: method --
+        p2 = (
+            f"<p><strong>How this was calculated:</strong> The system applied "
+            f"<strong>{formula}</strong> to the dataset. "
+            f"This value was read directly from the source data.</p>"
         )
-        kpis = [{"name": metric, "value": result, "unit": unit or "", "insight": ""}]
+
+        # -- Record details list --
+        record_html = ""
+        if record_details:
+            items = "".join(
+                f"<li><strong>{k}:</strong> {v}</li>"
+                for k, v in list(record_details.items())[:5]
+            )
+            record_html = f"<p><strong>Record details:</strong></p><ul>{items}</ul>"
+
+        # -- Suggestion --
+        p3 = (
+            "<p><em>Note: AI narrative is temporarily unavailable — "
+            "the figures above come directly from the calculation engine. "
+            "Try your query again in a moment for the full analysis.</em></p>"
+        )
+
+        answer = p1 + p2 + record_html + p3
+
+        # KPI with identifying_fields when a specific row was found
+        kpi: Dict = {
+            "name":    metric,
+            "value":   result,
+            "unit":    unit_str,
+            "insight": f"{value_str} — computed via {formula}",
+        }
+        if record_details:
+            kpi["identifying_fields"] = [
+                {"label": k, "value": str(v)}
+                for k, v in list(record_details.items())[:5]
+            ]
+        kpis = [kpi]
+
     elif calc_result.get("breakdown"):
         top    = calc_result["breakdown"][0]
-        answer = f"<p><strong>Top result:</strong> {top['group']} — {top['value']} {unit}</p>"
-        kpis   = [{"name": top["group"], "value": top["value"], "unit": unit or "", "insight": ""}]
+        top_v  = f"{unit_pfx}{top['value']:,.2f}"
+        answer = (
+            f"<p><strong>Top result:</strong> {top['group']} — {top_v}</p>"
+            "<p><em>AI narrative temporarily unavailable. Full analysis will appear when the service recovers.</em></p>"
+        )
+        kpis   = [{"name": top["group"], "value": top["value"], "unit": unit_str, "insight": ""}]
     else:
         answer = "<p>Could not generate analysis for this query.</p>"
         kpis   = []

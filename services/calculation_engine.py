@@ -13,6 +13,7 @@ CalculationResult shape:
 {
   "metric":          str,
   "result":          float | None,      # scalar (None when breakdown is returned)
+  "record_details":  dict,              # non-empty ONLY for MAX/MIN scalar — the matching row's fields
   "breakdown":       list[{group, value}],  # for group_by queries
   "lead_breakdown":  dict,              # for multi-lead queries
   "group_by_col":    str | None,
@@ -141,6 +142,96 @@ def _apply_filters(
 
 
 # ---------------------------------------------------------------------------
+# Record detail extraction  (MAX / MIN scalar path only)
+# ---------------------------------------------------------------------------
+
+# Column name patterns that signal a person / entity identifier.
+_IDENTIFIER_PATTERNS = (
+    "name", "lead", "person", "client", "customer", "company",
+    "contact", "account", "owner", "title", "rep", "manager",
+    "source", "status", "stage", "type", "category", "region",
+    "city", "country", "email",
+)
+
+def _find_record_details(
+    df: pd.DataFrame,
+    col_name: str,
+    aggregation: str,
+    schema: Dict,
+) -> Dict[str, Any]:
+    """
+    For MAX / MIN scalar results: find the matching row and return its
+    identifying fields so the LLM can name the specific lead / company.
+
+    Returns {column_label: value} — empty dict on any failure.
+    Priority order: name-like columns → schema dimension columns → other string columns.
+    At most 8 fields returned to keep the prompt lean.
+    """
+    try:
+        if aggregation not in ("max", "min"):
+            return {}
+
+        # Use pandas' exact value (avoids float round-trip issues)
+        target = df[col_name].max() if aggregation == "max" else df[col_name].min()
+        matching = df[df[col_name] == target]
+        if matching.empty:
+            return {}
+
+        row = matching.iloc[0]
+
+        # Collect known dimension column names from schema
+        dim_cols: set = set()
+        dim_map = (schema or {}).get("dimension_map", {})
+        for v in dim_map.values():
+            if isinstance(v, list):
+                dim_cols.update(v)
+            elif isinstance(v, str):
+                dim_cols.add(v)
+
+        priority: List[tuple] = []   # (col, val) — name / entity columns
+        secondary: List[tuple] = []  # (col, val) — dimension cols or other strings
+
+        for col in df.columns:
+            if col == col_name:
+                continue
+
+            val = row[col]
+
+            # Skip nulls and empty strings
+            if pd.isna(val):
+                continue
+            str_val = str(val).strip()
+            if not str_val or str_val.lower() in ("nan", "none", ""):
+                continue
+
+            col_lower = col.lower()
+
+            # Skip purely numeric columns that aren't dimensions
+            if isinstance(val, (int, float)) and col not in dim_cols:
+                continue
+
+            if any(p in col_lower for p in _IDENTIFIER_PATTERNS):
+                priority.append((col, str_val))
+            elif col in dim_cols or not isinstance(val, (int, float)):
+                secondary.append((col, str_val))
+
+        details: Dict[str, Any] = {}
+        for col, val in (priority + secondary)[:8]:
+            details[col] = val
+
+        if details:
+            logger.info(
+                f"[CALC_ENGINE] record_details for {aggregation.upper()}({col_name}): "
+                f"{list(details.keys())}"
+            )
+        return details
+
+    except Exception as exc:
+        logger.warning(f"[CALC_ENGINE] _find_record_details failed: {exc}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Direct column calculation  (column exists in dataset)
 # ---------------------------------------------------------------------------
 
@@ -202,38 +293,43 @@ def _calc_direct(
                 if not (isinstance(v, float) and np.isnan(v))
             ]
             return {
-                "metric":        metric,
-                "result":        None,
-                "breakdown":     breakdown,
+                "metric":         metric,
+                "result":         None,
+                "record_details": {},
+                "breakdown":      breakdown,
                 "lead_breakdown": {},
-                "group_by_col":  group_col,
-                "metric_col":    col_name,
-                "formula":       f"{agg_label}({col_name}) GROUP BY {group_col}",
-                "source":        "pre_computed" if is_precomp else "calculated",
-                "unit":          unit,
+                "group_by_col":   group_col,
+                "metric_col":     col_name,
+                "formula":        f"{agg_label}({col_name}) GROUP BY {group_col}",
+                "source":         "pre_computed" if is_precomp else "calculated",
+                "unit":           unit,
                 "filter_applied": filter_desc,
-                "row_count":     len(df),
-                "warnings":      warnings,
-                "error":         None,
+                "row_count":      len(df),
+                "warnings":       warnings,
+                "error":          None,
             }
 
     # ---- Scalar path ----
     result, formula = _aggregate_scalar(col_data, col_name, aggregation, is_summable)
 
+    # For MAX / MIN: find and attach the full row so the LLM can name the lead / company.
+    record_details = _find_record_details(df, col_name, aggregation, schema)
+
     return {
-        "metric":        metric,
-        "result":        round(result, 2),
-        "breakdown":     [],
+        "metric":         metric,
+        "result":         round(result, 2),
+        "record_details": record_details,
+        "breakdown":      [],
         "lead_breakdown": {},
-        "group_by_col":  None,
-        "metric_col":    col_name,
-        "formula":       formula,
-        "source":        "pre_computed" if is_precomp else "calculated",
-        "unit":          unit,
+        "group_by_col":   None,
+        "metric_col":     col_name,
+        "formula":        formula,
+        "source":         "pre_computed" if is_precomp else "calculated",
+        "unit":           unit,
         "filter_applied": filter_desc,
-        "row_count":     len(df),
-        "warnings":      warnings,
-        "error":         None,
+        "row_count":      len(df),
+        "warnings":       warnings,
+        "error":          None,
     }
 
 
@@ -338,19 +434,20 @@ def _calc_derived(
                     breakdown.append({"group": str(group_val), "value": val})
             breakdown.sort(key=lambda x: x["value"], reverse=True)
             return {
-                "metric":        metric,
-                "result":        None,
-                "breakdown":     breakdown,
+                "metric":         metric,
+                "result":         None,
+                "record_details": {},
+                "breakdown":      breakdown,
                 "lead_breakdown": {},
-                "group_by_col":  group_col,
-                "metric_col":    list(required_cols.values()),
-                "formula":       formula_label,
-                "source":        "calculated",
-                "unit":          col_res["unit"],
+                "group_by_col":   group_col,
+                "metric_col":     list(required_cols.values()),
+                "formula":        formula_label,
+                "source":         "calculated",
+                "unit":           col_res["unit"],
                 "filter_applied": filter_desc,
-                "row_count":     len(df),
-                "warnings":      warnings,
-                "error":         None,
+                "row_count":      len(df),
+                "warnings":       warnings,
+                "error":          None,
             }
 
     # ---- Scalar path ----
@@ -361,19 +458,20 @@ def _calc_derived(
         )
 
     return {
-        "metric":        metric,
-        "result":        result,
-        "breakdown":     [],
+        "metric":         metric,
+        "result":         result,
+        "record_details": {},   # derived metrics don't have a single source row
+        "breakdown":      [],
         "lead_breakdown": {},
-        "group_by_col":  None,
-        "metric_col":    list(required_cols.values()),
-        "formula":       formula_label,
-        "source":        "calculated",
-        "unit":          col_res["unit"],
+        "group_by_col":   None,
+        "metric_col":     list(required_cols.values()),
+        "formula":        formula_label,
+        "source":         "calculated",
+        "unit":           col_res["unit"],
         "filter_applied": filter_desc,
-        "row_count":     len(df),
-        "warnings":      warnings,
-        "error":         None,
+        "row_count":      len(df),
+        "warnings":       warnings,
+        "error":          None,
     }
 
 
@@ -405,19 +503,20 @@ def _calc_multi_leads(
         }
 
     return {
-        "metric":        "leads_multi",
-        "result":        None,
-        "breakdown":     [],
+        "metric":         "leads_multi",
+        "result":         None,
+        "record_details": {},
+        "breakdown":      [],
         "lead_breakdown": results,
-        "group_by_col":  None,
-        "metric_col":    [v["col"] for v in results.values()],
-        "formula":       "SUM per lead type",
-        "source":        "calculated",
-        "unit":          "count",
+        "group_by_col":   None,
+        "metric_col":     [v["col"] for v in results.values()],
+        "formula":        "SUM per lead type",
+        "source":         "calculated",
+        "unit":           "count",
         "filter_applied": filter_desc,
-        "row_count":     len(df),
-        "warnings":      [],
-        "error":         None,
+        "row_count":      len(df),
+        "warnings":       [],
+        "error":          None,
     }
 
 
@@ -428,17 +527,18 @@ def _calc_multi_leads(
 def _error_result(msg: str) -> Dict:
     logger.warning(f"[CALC_ENGINE] {msg}")
     return {
-        "metric":        "error",
-        "result":        None,
-        "breakdown":     [],
+        "metric":         "error",
+        "result":         None,
+        "record_details": {},
+        "breakdown":      [],
         "lead_breakdown": {},
-        "group_by_col":  None,
-        "metric_col":    None,
-        "formula":       None,
-        "source":        "error",
-        "unit":          None,
+        "group_by_col":   None,
+        "metric_col":     None,
+        "formula":        None,
+        "source":         "error",
+        "unit":           None,
         "filter_applied": None,
-        "row_count":     0,
-        "warnings":      [msg],
-        "error":         msg,
+        "row_count":      0,
+        "warnings":       [msg],
+        "error":          msg,
     }

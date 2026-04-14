@@ -4,6 +4,7 @@ pymongo
 python-dotenv
 pydantic
 google-genai
+anthropic
 boto3
 pandas
 numpy
@@ -12,3 +13,4 @@ python-multipart
 langchain
 langchain-core
 rapidfuzz
+anthropic

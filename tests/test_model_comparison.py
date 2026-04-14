@@ -33,13 +33,18 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     pytest.skip("GEMINI_API_KEY not set — skipping model comparison", allow_module_level=True)
 
-PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "gemini-2.5-flash")
-COMPARE_MODEL = os.getenv("COMPARE_MODEL", "gemma-4-31b-it")
+PRIMARY_MODEL    = os.getenv("PRIMARY_MODEL", "gemini-2.5-flash")
+COMPARE_MODEL    = os.getenv("COMPARE_MODEL", "gemma-4-31b-it")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-_client = genai.Client(api_key=API_KEY)
-_config  = _genai_types.GenerateContentConfig(
+_google_client = genai.Client(api_key=API_KEY)
+_google_config = _genai_types.GenerateContentConfig(
     automatic_function_calling=_genai_types.AutomaticFunctionCallingConfig(disable=True)
 )
+_anthropic_client = None
+if ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "your-claude-api-key-here":
+    import anthropic as _anthropic_sdk
+    _anthropic_client = _anthropic_sdk.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -47,12 +52,23 @@ _config  = _genai_types.GenerateContentConfig(
 # ---------------------------------------------------------------------------
 
 def _call(model: str, prompt: str) -> tuple[str, float]:
-    """Returns (response_text, latency_seconds)."""
+    """Returns (response_text, latency_seconds). Routes to Anthropic or Google."""
     t0 = time.monotonic()
     try:
-        resp = _client.models.generate_content(model=model, contents=prompt, config=_config)
-        text = resp.text if hasattr(resp, "text") else str(resp)
-        return text, time.monotonic() - t0
+        if model.startswith("claude-"):
+            if not _anthropic_client:
+                return "[ERROR] ANTHROPIC_API_KEY not set", 0.0
+            msg  = _anthropic_client.messages.create(
+                model=model, max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text, time.monotonic() - t0
+        else:
+            resp = _google_client.models.generate_content(
+                model=model, contents=prompt, config=_google_config,
+            )
+            text = resp.text if hasattr(resp, "text") else str(resp)
+            return text, time.monotonic() - t0
     except Exception as e:
         return f"[ERROR] {e}", time.monotonic() - t0
 
