@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 # Examples (.env):
 #   LLM_MODEL=gemma-4-31b-it
 #   LLM_MODEL=claude-sonnet-4-5
-_LLM_MODEL  = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+_LLM_MODEL  = os.getenv("LLM_MODEL", "claude-sonnet-4-5")
 _IS_CLAUDE  = _LLM_MODEL.startswith("claude-")
 
 # ── Client initialisation ─────────────────────────────────────────────────────
