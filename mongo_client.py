@@ -22,11 +22,16 @@ import os
 
 import certifi
 import numpy as np
+from pathlib import Path
 from dotenv import load_dotenv
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
-load_dotenv()
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# print("MONGO_URI:", os.getenv("MONGO_URI"))
+print("DB_NAME:", os.getenv("DB_NAME"))
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -51,13 +56,21 @@ class MongoDBClient:
     def connect(self):
         try:
             logger.info("[MONGO] Connecting to MongoDB…")
+            kwargs = {
+                "retryWrites": True,
+                "retryReads": True,
+                "serverSelectionTimeoutMS": 20_000,
+            }
+            if self.uri and "localhost" not in self.uri:
+                kwargs["tls"] = True
+                kwargs["tlsCAFile"] = certifi.where()
+            elif not self.uri:
+                # If uri is None, pymongo connects to localhost by default
+                pass
+
             self.client = MongoClient(
                 self.uri,
-                tls=True,
-                tlsCAFile=certifi.where(),
-                retryWrites=True,
-                retryReads=True,
-                serverSelectionTimeoutMS=20_000,
+                **kwargs
             )
             self.client.admin.command("ping")
             self.db                 = self.client[self.db_name]

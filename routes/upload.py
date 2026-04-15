@@ -33,6 +33,7 @@ Also accepts legacy single-file format:
 import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import List
@@ -48,6 +49,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_DATASETS_PER_SESSION = 4
+_BINARY_TOKENS = (
+    "pk\x03\x04",
+    "[content_types].xml",
+    "content_typesxml",
+    "_rels/.rels",
+    "rels/rels",
+    "docprops",
+    "sharedstrings",
+    "stylesxml",
+    "xl/workbook",
+    "xl/worksheets",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +249,84 @@ def _hash_data(data: list) -> str:
     return hashlib.md5(canonical).hexdigest()
 
 
+def _looks_corrupted_text(text: str) -> bool:
+    if text is None:
+        return False
+
+    s = str(text).replace("\x00", " ").strip()
+    if not s:
+        return False
+
+    lower = s.lower()
+    compact = re.sub(r"[^a-z0-9/_\-.]", "", lower)
+
+    if any(token in lower or token in compact for token in _BINARY_TOKENS):
+        return True
+    if compact.startswith("pk") and ("content" in compact or "rels" in compact):
+        return True
+
+    sample = s[:300]
+    printable_ratio = sum(1 for ch in sample if ch.isprintable()) / max(len(sample), 1)
+    alnum_ratio = sum(1 for ch in sample if ch.isalnum()) / max(len(sample), 1)
+    symbol_ratio = sum(1 for ch in sample if not ch.isalnum()) / max(len(sample), 1)
+
+    if printable_ratio < 0.85:
+        return True
+    if len(sample) > 25 and alnum_ratio < 0.25:
+        return True
+    if len(sample) > 30 and symbol_ratio > 0.60:
+        return True
+
+    return False
+
+
+def _sanitize_uploaded_rows(original_data: list, file_name: str) -> list:
+    """
+    Keep only clean table-like rows/fields from FE payload before storing in Mongo.
+    Preserves original column labels (case/spacing/currency symbols) so profiler
+    and query-time column mapping remain aligned.
+    """
+    cleaned_rows = []
+
+    for idx, row in enumerate(original_data):
+        if not isinstance(row, dict):
+            logger.warning(f"[UPLOAD] [{file_name}] Skipping non-object row at index={idx}")
+            continue
+
+        clean_row = {}
+        for k, v in row.items():
+            key = str(k or "").replace("\x00", " ").strip()
+            if not key:
+                continue
+            if key.lower().startswith("unnamed:"):
+                continue
+            if len(key) > 120:
+                continue
+            if _looks_corrupted_text(key):
+                continue
+
+            if v is None:
+                continue
+            if isinstance(v, (dict, list, tuple, set)):
+                value = json.dumps(v, ensure_ascii=False, default=str)
+            else:
+                value = v
+
+            if isinstance(value, str):
+                value = value.replace("\x00", " ").strip()
+                if not value:
+                    continue
+                if _looks_corrupted_text(value):
+                    continue
+
+            clean_row[key] = value
+
+        if clean_row:
+            cleaned_rows.append(clean_row)
+
+    return cleaned_rows
+
+
 async def _process_single_file(
     db,
     file_name: str,
@@ -255,15 +346,23 @@ async def _process_single_file(
     # schema/data mismatch: profiler stores 'Expected Revenue (₹)' but the
     # DataFrame at query time would have 'expected_revenue_(₹)' → not found.
     # MongoDB handles any UTF-8 string (₹, £, €, spaces) as a document key.
-    cleaned_data = [
-        {
-            str(k).strip(): v
-            for k, v in row.items()
-            if k and str(k).strip() and not str(k).strip().lower().startswith("unnamed:")
-        }
-        for row in original_data
-    ]
-    columns = list(cleaned_data[0].keys()) if cleaned_data else []
+    cleaned_data = _sanitize_uploaded_rows(original_data, file_name)
+    if not cleaned_data:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Uploaded file '{file_name}' has no valid tabular rows after sanitization. "
+                "Please send parsed JSON rows from FE (not binary file content)."
+            ),
+        )
+    # Build dynamic column list from all cleaned FE rows (not just row 0).
+    columns = []
+    seen_cols = set()
+    for row in cleaned_data:
+        for col in row.keys():
+            if col not in seen_cols:
+                seen_cols.add(col)
+                columns.append(col)
 
     db["documents"].delete_many({"file_name": file_name, "type": "dataset"})
     db["documents"].insert_one({
@@ -278,7 +377,7 @@ async def _process_single_file(
 
     # ---- Phase 2: Embeddings (skip if content unchanged) ----
     try:
-        data_hash     = _hash_data(original_data)
+        data_hash     = _hash_data(cleaned_data)
         existing_meta = db["documents"].find_one(
             {"file_name": file_name, "type": "embedding_meta"},
             {"data_hash": 1},
@@ -304,7 +403,7 @@ async def _process_single_file(
                     "type":       "embedding_meta",
                     "file_name":  file_name,
                     "data_hash":  data_hash,
-                    "row_count":  len(original_data),
+                    "row_count":  len(cleaned_data),
                     "updated_at": datetime.utcnow(),
                 },
                 upsert=True,

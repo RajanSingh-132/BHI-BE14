@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes.chat_routes import router as chat_router
+from routes.analytics import router as analytics_router
 from routes.upload import router as upload_router
 from mongo_client import mongo_client as mongo
 from dotenv import load_dotenv
@@ -46,6 +47,7 @@ app.add_middleware(
 
 app.include_router(chat_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
+app.include_router(analytics_router, prefix="/api")
 
 
 @app.get("/")
