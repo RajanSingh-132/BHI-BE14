@@ -93,6 +93,12 @@ DERIVABLE_METRICS: Dict[str, Dict] = {
         "unit": "currency_rate",
         "summable": False,
     },
+    "pipeline_revenue": {
+        "requires": ["deal_amount", "status_probability", "is_converted"],
+        "formula_label": "Σ (Deal Value × Status Probability) WHERE Converted=Yes, Value>0, Close Date exists",
+        "unit": "currency",
+        "summable": True,
+    },
 }
 
 # All lead-type roles — returned together for generic "leads" queries
@@ -107,9 +113,9 @@ METRIC_ALIASES: Dict[str, str] = {
     "earned revenue":     "revenue_actual",
     "earnings":           "revenue_actual",
     "income":             "revenue_actual",
-    "expected revenue":   "revenue_expected",
-    "pipeline revenue":   "revenue_expected",
-    "projected revenue":  "revenue_expected",
+    "expected revenue":   "pipeline_revenue",
+    "pipeline revenue":   "pipeline_revenue",
+    "projected revenue":  "pipeline_revenue",
     "cost":               "cost_total",
     "total cost":         "cost_total",
     "spend":              "cost_total",

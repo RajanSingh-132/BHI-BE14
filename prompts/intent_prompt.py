@@ -39,6 +39,7 @@ Rules:
 - For "qualified leads" or "converted leads" → set specific metric, return_all_lead_types: false.
 - If a filter value matches something in the dimension values above, use that exact casing.
 - "aggregation" should be "group_by" when group_by is set.
+- Date formats: The system supports DD/MM/YYYY, MM/DD/YYYY, and YYYY/MM/DD.
 
 User Query: {query}
 """

@@ -153,7 +153,16 @@ def _monthly_trend(
         return []
 
     temp = df.copy()
-    temp["_date"] = pd.to_datetime(temp[date_col], errors="coerce")
+    # Robust date parsing: handles DD/MM/YYYY, MM/DD/YYYY, and YYYY/MM/DD
+    # dayfirst=True tells pandas to prefer DD/MM/YYYY when ambiguous (e.g. 01/02/2023)
+    temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
+    
+    # If some rows failed to parse (e.g. they were MM/DD/YYYY but dayfirst=True caused an issue or they are YYYY/MM/DD), 
+    # pandas usually handles them anyway, but we ensure maximum coverage.
+    if temp["_date"].isna().any():
+        fallback = pd.to_datetime(temp[date_col], errors="coerce")
+        temp["_date"] = temp["_date"].fillna(fallback)
+
     temp = temp.dropna(subset=["_date"])
     if temp.empty:
         return []
@@ -457,10 +466,32 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
                 _to_numeric(df[primary_rev_col]).dropna().tolist()
             )
 
-        if expected_col:
-            v = _to_numeric(df[expected_col]).sum()
-            if pd.notna(v):
-                expected_revenue += float(v)
+        # ── Pipeline Revenue (New Formula) ───────────────────────────────────
+        # Formula: Σ (Deal Value × Status Probability) WHERE Converted=Yes, Value>0, Close Date exists
+        prob_col = _schema_role_col(schema, "status_probability") or _find_col(
+            df, ["probability", "deal_probability", "win_probability", "status_probability"]
+        )
+        is_conv_col = _schema_role_col(schema, "is_converted") or _find_col(
+            df, ["converted", "is_converted", "is converted"]
+        )
+
+        if date_col and (deal_col or expected_col) and prob_col and is_conv_col:
+            # Use deal_col if available, otherwise expected_col as the base value
+            val_base = deal_col or expected_col
+            df_p = df.copy()
+            df_p["_val"] = _to_numeric(df_p[val_base]).fillna(0)
+            df_p["_prob"] = _to_numeric(df_p[prob_col]).fillna(0)
+            # Normalize probability (assume 0-100 if max > 1.1)
+            if df_p["_prob"].max() > 1.1:
+                df_p["_prob"] = df_p["_prob"] / 100.0
+            
+            mask = (
+                df_p[date_col].notna() &
+                (df_p[date_col].astype(str).str.strip() != "") &
+                (df_p["_val"] > 0) &
+                (df_p[is_conv_col].astype(str).str.lower().str.contains("yes|true|1", regex=True))
+            )
+            expected_revenue += float((df_p[mask]["_val"] * df_p[mask]["_prob"]).sum())
 
         if spend_col:
             v = _to_numeric(df[spend_col]).sum()
@@ -514,11 +545,9 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
         if first > 0:
             growth_rate = _round(((last - first) / first) * 100)
 
-    pipeline_value = (
-        _round(expected_revenue)
-        if expected_revenue > 0
-        else _round(total_revenue * 0.3)
-    )
+    # Pipeline Revenue = Σ (Deal Value × Status Probability) WHERE Converted=Yes, Value>0, Close Date exists
+    # Note: Using expected_revenue as the accumulator for the specific formula calculated during dataset loops
+    pipeline_value = _round(expected_revenue) if expected_revenue > 0 else 0.0
     roi = (
         _round(((total_revenue - total_spend) / total_spend) * 100)
         if total_spend > 0

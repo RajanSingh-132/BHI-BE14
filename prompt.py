@@ -82,6 +82,17 @@ Conversions = conversions OR sales_count OR "Closed Won" OR metadata.conversions
 Impressions = impressions
 Clicks = clicks
 Date = date OR month
+
+--------------------------------------------------
+
+DATE HANDLING (CRITICAL)
+
+The system automatically detects and parses multiple date formats:
+• DD/MM/YYYY
+• MM/DD/YYYY
+• YYYY/MM/DD
+
+When analyzing trends or filtering by date, assume the system has normalized these formats correctly.
 Campaign = campaign OR source
 Stage = deal_stage
 Budget = budget_hours
@@ -178,6 +189,16 @@ COUNT(leads) GROUP BY deal_stage
 
 Owner Performance =
 SUM(deal_value) GROUP BY owner
+
+Pipeline Revenue =
+Σ (Deal Value × Status Probability)
+WHERE:
+- Converted = Yes
+- Deal Value > 0
+- Close Date exists
+- Close Date in selected range
+
+Note: Only calculate if Close Date is available in the dataset.
 
 --------------------------------------------------
 

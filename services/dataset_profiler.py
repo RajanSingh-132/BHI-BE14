@@ -163,6 +163,19 @@ SEMANTIC_ONTOLOGY: Dict[str, Dict] = {
         "summable": False,
         "unit": "score",
     },
+    # ---- Pipeline / CRM signals ----
+    "status_probability": {
+        "keywords": ["probability", "deal probability", "status probability", "win probability", "probability %"],
+        "exclude_if": [],
+        "summable": False,
+        "unit": "percentage",
+    },
+    "is_converted": {
+        "keywords": ["converted", "is converted", "converted leads", "is_converted"],
+        "exclude_if": [],
+        "summable": False,
+        "unit": "count",
+    },
 }
 
 # ---------------------------------------------------------------------------

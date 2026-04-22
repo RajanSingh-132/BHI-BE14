@@ -419,6 +419,39 @@ def _calc_derived(
                 convs = sub_df[required_cols["conversions"]].sum()
                 return None if convs == 0 else round(float(cost / convs), 2)
 
+            elif canonical_role == "pipeline_revenue":
+                date_col = get_dimension_col("date", schema)
+                if not date_col or date_col not in sub_df.columns:
+                    return None
+
+                conv_col = required_cols["is_converted"]
+                val_col  = required_cols["deal_amount"]
+                prob_col = required_cols["status_probability"]
+
+                # Ensure numeric
+                df_calc = sub_df.copy()
+                df_calc[val_col] = pd.to_numeric(df_calc[val_col], errors="coerce").fillna(0)
+                df_calc[prob_col] = pd.to_numeric(df_calc[prob_col], errors="coerce").fillna(0)
+
+                # Probabilities > 1.0 are assumed to be percentage points (e.g. 50 instead of 0.5)
+                # We'll normalize to 0.0 - 1.0 for the calculation.
+                p_max = df_calc[prob_col].max()
+                if p_max > 1.1:  # small buffer for precision
+                    df_calc["_prob"] = df_calc[prob_col] / 100.0
+                else:
+                    df_calc["_prob"] = df_calc[prob_col]
+
+                # Filter: Converted=Yes, Value>0, Close Date exists
+                mask = (
+                    df_calc[date_col].notna() & 
+                    (df_calc[date_col].astype(str).str.strip() != "") &
+                    (df_calc[val_col] > 0) &
+                    (df_calc[conv_col].astype(str).str.lower().str.contains("yes|true|1", regex=True))
+                )
+                
+                filtered = df_calc[mask]
+                return round(float((filtered[val_col] * filtered["_prob"]).sum()), 2)
+
         except Exception as e:
             logger.error(f"[CALC_ENGINE] _compute_on failed for {canonical_role}: {e}")
         return None
