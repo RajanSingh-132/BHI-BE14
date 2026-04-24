@@ -178,6 +178,34 @@ Lead Quality Indicator =
 
 --------------------------------------------------
 
+### 🔹 LEAD STATUS CLASSIFICATION (CRITICAL)
+
+When a dataset contains a status / stage / lead_status column, ALWAYS map
+each raw status value into one of the three canonical buckets below before
+calculating counts or revenue.  Do NOT reference any CRM platform name.
+
+CONTACTED — lead has entered the system and is being actively reached:
+  Raw values → New, Active, Inprogress,
+               Open, Marketing Qualified, Sales Accepted
+  (If a status is ambiguous, default to Contacted.)
+
+QUALIFIED — lead has been evaluated against criteria (pass or fail):
+  Raw values → Qualified, In Progress , Pending , Working , Marketing Qualified
+
+WON — lead has reached a closed final state:
+  Raw values → Won,Closed - Converted, Closed - Not Converted
+
+RULES:
+1. Never reference any CRM platform name.
+2. Always classify every incoming status into one of the three buckets.
+3. Treat Unqualified, Rejected, and Closed - Not Converted as valid
+   end-states — they are NOT errors.
+4. When reporting counts or revenue, group results only by:
+   Contacted / Qualified / Won.
+5. If a status value does not match any list above, default to Contacted.
+
+--------------------------------------------------
+
 ### 🔹 CRM / SALES METRICS
 Total Deal Value = SUM(deal_value)
 
@@ -191,7 +219,7 @@ Owner Performance =
 SUM(deal_value) GROUP BY owner
 
 Pipeline Revenue =
-Σ (Deal Value × Status Probability)
+Σ (Deal Value * Status Probability)
 WHERE:
 - Converted = Yes
 - Deal Value > 0

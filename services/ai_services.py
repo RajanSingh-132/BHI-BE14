@@ -46,6 +46,7 @@ from google.genai import types as _genai_types
 from mongo_client import mongo_client, _make_dataset_key
 from prompts.analysis_prompt import ANALYSIS_PROMPT, MULTI_DATASET_ANALYSIS_PROMPT
 from prompts.intent_prompt import INTENT_EXTRACTION_PROMPT
+from prompts.Lead_prompt import LEADS_SYSTEM_PROMPT
 from prompt import SYSTEM_PROMPT
 from rag_retriever import RAGRetriever
 from services.calculation_engine import calculate as run_calculation
@@ -444,12 +445,14 @@ def _analyze_results_multi(
 
     # Use the first dataset's type to drive KPI card selection
     first_type = dataset_results[0].get("dataset_type", "") if dataset_results else ""
+    domain_knowledge = LEADS_SYSTEM_PROMPT if first_type == "leads" else ""
 
     prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
         dataset_names            = dataset_names,
         query                    = query,
         dataset_results_json     = results_json,
         kpi_display_instructions = get_fields_for_prompt(query, first_type),
+        domain_knowledge         = domain_knowledge,
     ) + history_section
 
     raw = _gemini_generate(
@@ -494,6 +497,8 @@ def _analyze_results(
     history_section = f"\nConversation History:\n{history_text}\n" if history_text else ""
 
     dataset_type = schema_profile.get("dataset_type", "generic")
+    domain_knowledge = LEADS_SYSTEM_PROMPT if dataset_type == "leads" else ""
+
     prompt = ANALYSIS_PROMPT.format(
         dataset_type             = dataset_type,
         row_count                = calc_result.get("row_count", "unknown"),
@@ -501,6 +506,7 @@ def _analyze_results(
         computed_results_json    = json.dumps(calc_result, indent=2, default=str),
         query                    = query,
         kpi_display_instructions = get_fields_for_prompt(query, dataset_type),
+        domain_knowledge         = domain_knowledge,
     ) + history_section
 
     raw = _gemini_generate(prompt, label="ANALYSIS")

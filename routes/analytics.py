@@ -22,6 +22,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from mongo_client import mongo_client as _mongo
+from prompts.Lead_prompt import classify_lead_status, BUCKET_ORDER   # ← single source of truth
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -153,12 +154,7 @@ def _monthly_trend(
         return []
 
     temp = df.copy()
-    # Robust date parsing: handles DD/MM/YYYY, MM/DD/YYYY, and YYYY/MM/DD
-    # dayfirst=True tells pandas to prefer DD/MM/YYYY when ambiguous (e.g. 01/02/2023)
     temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
-    
-    # If some rows failed to parse (e.g. they were MM/DD/YYYY but dayfirst=True caused an issue or they are YYYY/MM/DD), 
-    # pandas usually handles them anyway, but we ensure maximum coverage.
     if temp["_date"].isna().any():
         fallback = pd.to_datetime(temp[date_col], errors="coerce")
         temp["_date"] = temp["_date"].fillna(fallback)
@@ -178,8 +174,8 @@ def _monthly_trend(
     result = []
     for period, val in grouped.sort_index().tail(12).items():
         result.append({
-            "sort_key": str(period),          # "2025-01" — used for cross-dataset merge
-            "month": period.strftime("%b '%y"),  # "Jan '25"
+            "sort_key": str(period),
+            "month": period.strftime("%b '%y"),
             "value": _round(val),
         })
     return result
@@ -256,146 +252,7 @@ def _load_session_datasets(
 
 # ─── LEADS builder ────────────────────────────────────────────────────────────
 
-def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return LeadMetrics-compatible dict."""
-    total_leads = 0.0
-    qualified_leads = 0.0
-    converted_leads = 0.0
-    total_spend = 0.0
-    all_scores: List[float] = []
-    all_sources: List[Dict[str, Any]] = []
-    all_statuses: List[Dict[str, Any]] = []
-    all_monthly: List[Dict[str, Any]] = []
-
-    for entry in dataset_entries:
-        df = pd.DataFrame(entry["data"])
-        if df.empty:
-            continue
-        schema = entry.get("schema", {})
-
-        leads_col = _schema_role_col(schema, "leads_total") or _find_col(
-            df, ["leads", "total_leads", "lead_count", "new_leads", "num_leads", "lead_volume"]
-        )
-        qual_col = _schema_role_col(schema, "leads_qualified") or _find_col(
-            df, ["qualified_leads", "qualified", "mql", "sql", "marketing_qualified"]
-        )
-        conv_col = _schema_role_col(schema, "leads_converted", "conversions") or _find_col(
-            df, ["converted_leads", "conversions", "converted", "closed_won", "deals_closed", "won"]
-        )
-        spend_col = _schema_role_col(schema, "cost_total") or _find_col(
-            df, ["spend", "cost", "total_spend", "budget", "ad_spend", "marketing_spend"]
-        )
-        score_col = _find_col(
-            df, ["lead_score", "score", "rating", "quality_score", "priority_score"]
-        )
-        source_col = _schema_dim_col(schema, "source", "channel") or _find_col(
-            df,
-            [
-                "source", "lead_source", "channel", "medium", "origin",
-                "referral", "utm_source", "acquisition_source", "traffic_source",
-            ],
-        )
-        status_col = _schema_dim_col(schema, "status") or _find_col(
-            df,
-            [
-                "status", "stage", "lead_status", "pipeline_stage",
-                "state", "phase", "lead_stage", "funnel_stage",
-            ],
-        )
-        date_col = _schema_dim_col(schema, "date") or _find_col(
-            df,
-            [
-                "date", "created_at", "created_date", "month",
-                "timestamp", "period", "time", "week", "record_date",
-            ],
-        )
-
-        # ── Totals ──────────────────────────────────────────────────────────
-        if leads_col:
-            v = _to_numeric(df[leads_col]).sum()
-            if pd.notna(v):
-                total_leads += float(v)
-        else:
-            total_leads += len(df)
-
-        if qual_col:
-            v = _to_numeric(df[qual_col]).sum()
-            if pd.notna(v):
-                qualified_leads += float(v)
-
-        if conv_col:
-            v = _to_numeric(df[conv_col]).sum()
-            if pd.notna(v):
-                converted_leads += float(v)
-
-        if spend_col:
-            v = _to_numeric(df[spend_col]).sum()
-            if pd.notna(v):
-                total_spend += float(v)
-
-        if score_col:
-            all_scores.extend(
-                _to_numeric(df[score_col]).dropna().tolist()
-            )
-
-        # ── Breakdowns ──────────────────────────────────────────────────────
-        if source_col:
-            all_sources.extend(_group_by_col(df, source_col, leads_col))
-
-        if status_col:
-            all_statuses.extend(_group_by_col(df, status_col, leads_col))
-
-        if date_col:
-            all_monthly.extend(_monthly_trend(df, date_col, leads_col))
-
-    # ── Aggregate across datasets ────────────────────────────────────────────
-    sources_agg = _agg_named_groups(all_sources)[:10]
-    statuses_agg = _agg_named_groups(all_statuses)[:10]
-
-    source_total = sum(s["value"] for s in sources_agg) or 1.0
-    top_sources = [
-        {
-            "source": s["name"],
-            "count": int(s["value"]),
-            "percentage": _round((s["value"] / source_total) * 100),
-        }
-        for s in sources_agg
-    ]
-    by_status = [{"status": s["name"], "count": int(s["value"])} for s in statuses_agg]
-
-    month_data = _agg_months(all_monthly)
-    monthly_trend = [
-        {"month": month_data["labels"][k], "leads": int(month_data["agg"][k])}
-        for k in sorted(month_data["agg"].keys())
-    ][-12:]
-
-    total_leads = int(total_leads)
-    qualified_leads = int(qualified_leads)
-    converted_leads = int(converted_leads)
-
-    conversion_rate = _round((converted_leads / total_leads * 100) if total_leads > 0 else 0)
-    avg_lead_score = _round(sum(all_scores) / len(all_scores)) if all_scores else 0.0
-    cost_per_lead = _round(total_spend / total_leads) if total_leads > 0 and total_spend > 0 else 0.0
-
-    best_lead = top_sources[0] if top_sources else None
-    worst_lead = top_sources[-1] if len(top_sources) > 1 else None
-
-    return {
-        "totalLeads": total_leads,
-        "qualifiedLeads": qualified_leads,
-        "convertedLeads": converted_leads,
-        "conversionRate": conversion_rate,
-        "avgLeadScore": avg_lead_score,
-        "costPerLead": cost_per_lead,
-        "topSources": top_sources,
-        "byStatus": by_status,
-        "monthlyTrend": monthly_trend,
-        "bestLead": best_lead,
-        "worstLead": worst_lead,
-    }
-
-
-# ─── REVENUE builder ──────────────────────────────────────────────────────────
+from routes.analysLead import _build_leads_metrics
 
 def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Return RevenueMetrics-compatible dict."""
@@ -414,22 +271,19 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
         schema = entry.get("schema", {})
 
         revenue_col = _schema_role_col(schema, "revenue_actual") or _find_col(
-            df,
-            [
+            df, [
                 "revenue", "actual_revenue", "total_revenue", "sales",
                 "income", "amount", "deal_value", "revenue_actual",
             ],
         )
         expected_col = _schema_role_col(schema, "revenue_expected") or _find_col(
-            df,
-            [
+            df, [
                 "expected_revenue", "pipeline_value", "projected_revenue",
                 "forecast", "expected_value", "potential_revenue",
             ],
         )
         deal_col = _schema_role_col(schema, "deal_amount") or _find_col(
-            df,
-            [
+            df, [
                 "deal_amount", "deal_size", "deal_value", "contract_value",
                 "opportunity_value", "deal_revenue",
             ],
@@ -438,19 +292,16 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
             df, ["spend", "cost", "total_spend", "budget", "expense", "cost_total"]
         )
         closed_col = _find_col(
-            df,
-            ["closed_deals", "won_deals", "closed_won", "deals_closed", "num_won"],
+            df, ["closed_deals", "won_deals", "closed_won", "deals_closed", "num_won"],
         )
         region_col = _schema_dim_col(schema, "region", "territory") or _find_col(
-            df,
-            [
+            df, [
                 "region", "territory", "area", "country", "state",
                 "city", "location", "zone", "market", "geo",
             ],
         )
         date_col = _schema_dim_col(schema, "date", "period") or _find_col(
-            df,
-            [
+            df, [
                 "date", "close_date", "month", "period", "quarter",
                 "timestamp", "created_at", "record_date",
             ],
@@ -462,12 +313,8 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
             v = _to_numeric(df[primary_rev_col]).sum()
             if pd.notna(v):
                 total_revenue += float(v)
-            all_deal_amounts.extend(
-                _to_numeric(df[primary_rev_col]).dropna().tolist()
-            )
+            all_deal_amounts.extend(_to_numeric(df[primary_rev_col]).dropna().tolist())
 
-        # ── Pipeline Revenue (New Formula) ───────────────────────────────────
-        # Formula: Σ (Deal Value × Status Probability) WHERE Converted=Yes, Value>0, Close Date exists
         prob_col = _schema_role_col(schema, "status_probability") or _find_col(
             df, ["probability", "deal_probability", "win_probability", "status_probability"]
         )
@@ -476,20 +323,17 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
         )
 
         if date_col and (deal_col or expected_col) and prob_col and is_conv_col:
-            # Use deal_col if available, otherwise expected_col as the base value
             val_base = deal_col or expected_col
             df_p = df.copy()
-            df_p["_val"] = _to_numeric(df_p[val_base]).fillna(0)
+            df_p["_val"]  = _to_numeric(df_p[val_base]).fillna(0)
             df_p["_prob"] = _to_numeric(df_p[prob_col]).fillna(0)
-            # Normalize probability (assume 0-100 if max > 1.1)
             if df_p["_prob"].max() > 1.1:
                 df_p["_prob"] = df_p["_prob"] / 100.0
-            
             mask = (
-                df_p[date_col].notna() &
-                (df_p[date_col].astype(str).str.strip() != "") &
-                (df_p["_val"] > 0) &
-                (df_p[is_conv_col].astype(str).str.lower().str.contains("yes|true|1", regex=True))
+                df_p[date_col].notna()
+                & (df_p[date_col].astype(str).str.strip() != "")
+                & (df_p["_val"] > 0)
+                & (df_p[is_conv_col].astype(str).str.lower().str.contains("yes|true|1", regex=True))
             )
             expected_revenue += float((df_p[mask]["_val"] * df_p[mask]["_prob"]).sum())
 
@@ -503,11 +347,10 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
             if pd.notna(v):
                 closed_deals += int(v)
         else:
-            # Count rows where status indicates closed
             status_col = _find_col(df, ["status", "stage", "deal_status"])
             if status_col:
                 mask = df[status_col].astype(str).str.lower().str.contains(
-                    r"clos|won|complet|success", regex=True
+                    r"closed|won|complet|success", regex=True
                 )
                 closed_deals += int(mask.sum())
             else:
@@ -534,41 +377,37 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
     total_revenue = _round(total_revenue)
     avg_deal_size = (
         _round(sum(all_deal_amounts) / len(all_deal_amounts))
-        if all_deal_amounts
-        else 0.0
+        if all_deal_amounts else 0.0
     )
 
     growth_rate = 0.0
     if len(monthly_revenue) >= 2:
         first = monthly_revenue[0]["revenue"]
-        last = monthly_revenue[-1]["revenue"]
+        last  = monthly_revenue[-1]["revenue"]
         if first > 0:
             growth_rate = _round(((last - first) / first) * 100)
 
-    # Pipeline Revenue = Σ (Deal Value × Status Probability) WHERE Converted=Yes, Value>0, Close Date exists
-    # Note: Using expected_revenue as the accumulator for the specific formula calculated during dataset loops
     pipeline_value = _round(expected_revenue) if expected_revenue > 0 else 0.0
     roi = (
         _round(((total_revenue - total_spend) / total_spend) * 100)
-        if total_spend > 0
-        else 0.0
+        if total_spend > 0 else 0.0
     )
 
-    best_revenue = by_region[0] if by_region else None
+    best_revenue  = by_region[0]  if by_region          else None
     worst_revenue = by_region[-1] if len(by_region) > 1 else None
 
     return {
-        "totalRevenue": total_revenue,
-        "avgDealSize": avg_deal_size,
-        "closedDeals": closed_deals,
+        "totalRevenue":  total_revenue,
+        "avgDealSize":   avg_deal_size,
+        "closedDeals":   closed_deals,
         "pipelineValue": pipeline_value,
-        "growthRate": growth_rate,
-        "totalSpend": _round(total_spend),
-        "roi": roi,
-        "byRegion": by_region,
+        "growthRate":    growth_rate,
+        "totalSpend":    _round(total_spend),
+        "roi":           roi,
+        "byRegion":      by_region,
         "monthlyRevenue": monthly_revenue,
-        "bestRevenue": best_revenue,
-        "worstRevenue": worst_revenue,
+        "bestRevenue":   best_revenue,
+        "worstRevenue":  worst_revenue,
     }
 
 
@@ -577,12 +416,12 @@ def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
 def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Return AdsMetrics-compatible dict."""
     total_impressions = 0.0
-    total_clicks = 0.0
+    total_clicks      = 0.0
     total_conversions = 0.0
-    total_spend = 0.0
-    total_revenue = 0.0
+    total_spend       = 0.0
+    total_revenue     = 0.0
     camp_agg: Dict[str, Dict[str, float]] = {}
-    ch_agg: Dict[str, Dict[str, float]] = {}
+    ch_agg:   Dict[str, Dict[str, float]] = {}
 
     for entry in dataset_entries:
         df = pd.DataFrame(entry["data"])
@@ -590,40 +429,13 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             continue
         schema = entry.get("schema", {})
 
-        imp_col = _schema_role_col(schema, "impressions") or _find_col(
-            df, ["impressions", "total_impressions", "views", "reach", "ad_impressions"]
-        )
-        clicks_col = _schema_role_col(schema, "clicks") or _find_col(
-            df, ["clicks", "total_clicks", "link_clicks", "tap", "ad_clicks"]
-        )
-        conv_col = _schema_role_col(schema, "conversions") or _find_col(
-            df,
-            [
-                "conversions", "total_conversions", "leads", "sign_ups",
-                "purchases", "goals", "actions",
-            ],
-        )
-        spend_col = _schema_role_col(schema, "cost_total") or _find_col(
-            df,
-            ["spend", "cost", "total_spend", "budget", "amount_spent", "ad_spend"],
-        )
-        revenue_col = _schema_role_col(schema, "revenue_actual") or _find_col(
-            df, ["revenue", "total_revenue", "sales_revenue", "income", "returns"]
-        )
-        campaign_col = _schema_dim_col(schema, "campaign") or _find_col(
-            df,
-            [
-                "campaign", "campaign_name", "ad_campaign", "utm_campaign",
-                "ad_name", "ad_set", "campaign_id",
-            ],
-        )
-        channel_col = _schema_dim_col(schema, "channel", "source") or _find_col(
-            df,
-            [
-                "channel", "platform", "network", "publisher",
-                "ad_channel", "source", "medium", "ad_platform",
-            ],
-        )
+        imp_col      = _schema_role_col(schema, "impressions") or _find_col(df, ["impressions", "total_impressions", "views", "reach", "ad_impressions"])
+        clicks_col   = _schema_role_col(schema, "clicks")      or _find_col(df, ["clicks", "total_clicks", "link_clicks", "tap", "ad_clicks"])
+        conv_col     = _schema_role_col(schema, "conversions") or _find_col(df, ["conversions", "total_conversions", "leads", "sign_ups", "purchases", "goals", "actions"])
+        spend_col    = _schema_role_col(schema, "cost_total")  or _find_col(df, ["spend", "cost", "total_spend", "budget", "amount_spent", "ad_spend"])
+        revenue_col  = _schema_role_col(schema, "revenue_actual") or _find_col(df, ["revenue", "total_revenue", "sales_revenue", "income", "returns"])
+        campaign_col = _schema_dim_col(schema, "campaign")     or _find_col(df, ["campaign", "campaign_name", "ad_campaign", "utm_campaign", "ad_name", "ad_set", "campaign_id"])
+        channel_col  = _schema_dim_col(schema, "channel", "source") or _find_col(df, ["channel", "platform", "network", "publisher", "ad_channel", "source", "medium", "ad_platform"])
 
         def safe_sum(col: Optional[str]) -> float:
             if not col or col not in df.columns:
@@ -632,18 +444,17 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             return float(v) if pd.notna(v) else 0.0
 
         total_impressions += safe_sum(imp_col)
-        total_clicks += safe_sum(clicks_col)
+        total_clicks      += safe_sum(clicks_col)
         total_conversions += safe_sum(conv_col)
-        total_spend += safe_sum(spend_col)
-        total_revenue += safe_sum(revenue_col)
+        total_spend       += safe_sum(spend_col)
+        total_revenue     += safe_sum(revenue_col)
 
-        # ── Campaign breakdown ───────────────────────────────────────────────
         if campaign_col and campaign_col in df.columns:
             temp_camp = pd.DataFrame({
                 "campaign": df[campaign_col].astype(str).str.strip(),
-                "spend":   _to_numeric(df[spend_col]).fillna(0) if spend_col else pd.Series([0.0] * len(df)),
-                "clicks":  _to_numeric(df[clicks_col]).fillna(0) if clicks_col else pd.Series([0.0] * len(df)),
-                "conv":    _to_numeric(df[conv_col]).fillna(0) if conv_col else pd.Series([0.0] * len(df)),
+                "spend":    _to_numeric(df[spend_col]).fillna(0)   if spend_col  else pd.Series([0.0] * len(df)),
+                "clicks":   _to_numeric(df[clicks_col]).fillna(0)  if clicks_col else pd.Series([0.0] * len(df)),
+                "conv":     _to_numeric(df[conv_col]).fillna(0)    if conv_col   else pd.Series([0.0] * len(df)),
             })
             temp_camp = temp_camp[
                 temp_camp["campaign"].notna()
@@ -654,17 +465,16 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
                 k = row["campaign"]
                 if k not in camp_agg:
                     camp_agg[k] = {"spend": 0.0, "clicks": 0.0, "conv": 0.0}
-                camp_agg[k]["spend"] += float(row["spend"])
+                camp_agg[k]["spend"]  += float(row["spend"])
                 camp_agg[k]["clicks"] += float(row["clicks"])
-                camp_agg[k]["conv"] += float(row["conv"])
+                camp_agg[k]["conv"]   += float(row["conv"])
 
-        # ── Channel breakdown ────────────────────────────────────────────────
         if channel_col and channel_col in df.columns:
             temp_ch = pd.DataFrame({
                 "channel": df[channel_col].astype(str).str.strip(),
-                "spend":   _to_numeric(df[spend_col]).fillna(0) if spend_col else pd.Series([0.0] * len(df)),
+                "spend":   _to_numeric(df[spend_col]).fillna(0)   if spend_col   else pd.Series([0.0] * len(df)),
                 "revenue": _to_numeric(df[revenue_col]).fillna(0) if revenue_col else pd.Series([0.0] * len(df)),
-                "clicks":  _to_numeric(df[clicks_col]).fillna(0) if clicks_col else pd.Series([0.0] * len(df)),
+                "clicks":  _to_numeric(df[clicks_col]).fillna(0)  if clicks_col  else pd.Series([0.0] * len(df)),
             })
             temp_ch = temp_ch[
                 temp_ch["channel"].notna()
@@ -675,17 +485,16 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
                 k = row["channel"]
                 if k not in ch_agg:
                     ch_agg[k] = {"spend": 0.0, "revenue": 0.0, "clicks": 0.0}
-                ch_agg[k]["spend"] += float(row["spend"])
+                ch_agg[k]["spend"]   += float(row["spend"])
                 ch_agg[k]["revenue"] += float(row["revenue"])
-                ch_agg[k]["clicks"] += float(row["clicks"])
+                ch_agg[k]["clicks"]  += float(row["clicks"])
 
-    # ── Finalise campaign list ───────────────────────────────────────────────
     by_campaign = sorted(
         [
             {
-                "campaign": k,
-                "spend": _round(v["spend"]),
-                "clicks": int(v["clicks"]),
+                "campaign":    k,
+                "spend":       _round(v["spend"]),
+                "clicks":      int(v["clicks"]),
                 "conversions": int(v["conv"]),
             }
             for k, v in camp_agg.items()
@@ -693,41 +502,39 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         key=lambda x: -x["clicks"],
     )[:10]
 
-    # Best = highest clicks, Worst = lowest clicks
-    best_campaign = by_campaign[0] if by_campaign else None
+    best_campaign  = by_campaign[0]  if by_campaign          else None
     worst_campaign = by_campaign[-1] if len(by_campaign) > 1 else None
 
-    # ── Finalise channel list ────────────────────────────────────────────────
     by_channel = sorted(
         [
             {
                 "channel": k,
-                "spend": _round(v["spend"]),
-                "roas": _round(v["revenue"] / v["spend"]) if v["spend"] > 0 else 0.0,
+                "spend":   _round(v["spend"]),
+                "roas":    _round(v["revenue"] / v["spend"]) if v["spend"] > 0 else 0.0,
             }
             for k, v in ch_agg.items()
         ],
         key=lambda x: -x["spend"],
     )[:10]
 
-    avg_ctr = _round((total_clicks / total_impressions * 100) if total_impressions > 0 else 0, 4)
-    avg_cpc = _round(total_spend / total_clicks if total_clicks > 0 else 0)
-    roas = _round(total_revenue / total_spend if total_spend > 0 else 0)
-    cost_per_conv = _round(total_spend / total_conversions if total_conversions > 0 else 0)
+    avg_ctr       = _round((total_clicks / total_impressions * 100) if total_impressions > 0 else 0, 4)
+    avg_cpc       = _round(total_spend / total_clicks               if total_clicks        > 0 else 0)
+    roas          = _round(total_revenue / total_spend              if total_spend         > 0 else 0)
+    cost_per_conv = _round(total_spend / total_conversions          if total_conversions   > 0 else 0)
 
     return {
-        "totalSpend": _round(total_spend),
-        "totalImpressions": _round(total_impressions),
-        "totalClicks": _round(total_clicks),
-        "totalConversions": _round(total_conversions),
-        "avgCTR": avg_ctr,
-        "avgCPC": avg_cpc,
-        "roas": roas,
+        "totalSpend":        _round(total_spend),
+        "totalImpressions":  _round(total_impressions),
+        "totalClicks":       _round(total_clicks),
+        "totalConversions":  _round(total_conversions),
+        "avgCTR":            avg_ctr,
+        "avgCPC":            avg_cpc,
+        "roas":              roas,
         "costPerConversion": cost_per_conv,
-        "byCampaign": by_campaign,
-        "byChannel": by_channel,
-        "bestCampaign": best_campaign,
-        "worstCampaign": worst_campaign,
+        "byCampaign":        by_campaign,
+        "byChannel":         by_channel,
+        "bestCampaign":      best_campaign,
+        "worstCampaign":     worst_campaign,
     }
 
 
@@ -767,28 +574,19 @@ async def get_analytics(
         )
 
     if analytics_type == "leads":
-        return {
-            "metrics": _build_leads_metrics(dataset_entries),
-            "warnings": warnings,
-        }
+        return {"metrics": _build_leads_metrics(dataset_entries), "warnings": warnings}
 
     if analytics_type == "revenue":
-        return {
-            "metrics": _build_revenue_metrics(dataset_entries),
-            "warnings": warnings,
-        }
+        return {"metrics": _build_revenue_metrics(dataset_entries), "warnings": warnings}
 
     if analytics_type == "ads":
-        return {
-            "metrics": _build_ads_metrics(dataset_entries),
-            "warnings": warnings,
-        }
+        return {"metrics": _build_ads_metrics(dataset_entries), "warnings": warnings}
 
     # summary
     return {
-        "leads":   {"metrics": _build_leads_metrics(dataset_entries)},
-        "revenue": {"metrics": _build_revenue_metrics(dataset_entries)},
-        "ads":     {"metrics": _build_ads_metrics(dataset_entries)},
+        "leads":    {"metrics": _build_leads_metrics(dataset_entries)},
+        "revenue":  {"metrics": _build_revenue_metrics(dataset_entries)},
+        "ads":      {"metrics": _build_ads_metrics(dataset_entries)},
         "warnings": warnings,
     }
 
@@ -804,10 +602,7 @@ async def submit_report(request: Request):
     active_datasets = session_state.get("active_datasets", []) or []
 
     if not active_datasets:
-        raise HTTPException(
-            status_code=404,
-            detail="No dataset found for this session.",
-        )
+        raise HTTPException(status_code=404, detail="No dataset found for this session.")
 
     db = request.app.state.mongo.db
     dataset_entries, warnings = _load_session_datasets(db, active_datasets)
@@ -821,22 +616,22 @@ async def submit_report(request: Request):
     submitted_at = datetime.datetime.utcnow().isoformat() + "Z"
 
     report: Dict[str, Any] = {
-        "session_id": session_id,
-        "datasets": active_datasets,
+        "session_id":   session_id,
+        "datasets":     active_datasets,
         "submitted_at": submitted_at,
-        "leads": _build_leads_metrics(dataset_entries),
-        "revenue": _build_revenue_metrics(dataset_entries),
-        "ads": _build_ads_metrics(dataset_entries),
-        "warnings": warnings,
+        "leads":        _build_leads_metrics(dataset_entries),
+        "revenue":      _build_revenue_metrics(dataset_entries),
+        "ads":          _build_ads_metrics(dataset_entries),
+        "warnings":     warnings,
     }
 
     db["reports"].insert_one(report)
     logger.info(f"[SUBMIT] Report saved for session={session_id!r} datasets={active_datasets}")
 
     return {
-        "status": "success",
-        "message": "Analysis report submitted and saved successfully.",
-        "session_id": session_id,
-        "datasets": active_datasets,
+        "status":       "success",
+        "message":      "Analysis report submitted and saved successfully.",
+        "session_id":   session_id,
+        "datasets":     active_datasets,
         "submitted_at": submitted_at,
     }

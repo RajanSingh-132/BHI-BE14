@@ -45,6 +45,8 @@ STRICT RULES:
    "In B2B SaaS, a deal of this size typically suggests...", or
    "Based on CRM best practices, a lead in this stage with this deal size would..."
 
+{domain_knowledge}
+
 Dataset context:
   - Type      : {dataset_type}
   - Records   : {row_count}
@@ -217,6 +219,8 @@ STRICT RULES:
 3. Apply your own expertise. Anchor every statement to the data, then layer expert
    reasoning, industry context, and best practices on top.
 4. When drawing on external knowledge, signal it naturally in the text.
+
+{domain_knowledge}
 
 Active datasets: {dataset_names}
 User Query: "{query}"
