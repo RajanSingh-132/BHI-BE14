@@ -46,6 +46,9 @@ match found per role.
   DATE / PERIOD   → date, created_at, created_date, month,
                     timestamp, period, time, week, record_date
 
+  OWNER / USER    → owner, assigned_to, sales_rep, agent, user,
+                    owner_name, created_by
+
   QUALIFIED LEADS → qualified_leads, qualified, mql, sql,
                     marketing_qualified
 
@@ -68,22 +71,21 @@ based on meaning only. Do NOT rely on any hardcoded list.
   CONTACTED
     Definition : Lead has entered the system and is being
                  actively reached or worked on. Includes any
-                 lead that is new, open, working, in-progress,
+                 lead that is new, open, working, Rejected, in-progress,
                  or under active nurturing.
     Default    : Any status whose meaning is unclear → Contacted
 ──────────────────────────────────────────────────────────────────
   QUALIFIED
     Definition : Lead has been formally evaluated against
                  scoring or criteria — whether it passed or
-                 failed. Includes unqualified, rejected, or
+                 failed. Includes unqualified or
                  disqualified leads (they were assessed).
 ──────────────────────────────────────────────────────────────────
   WON
     Definition : Lead has been successfully converted into a
                  customer, paying deal, or closed-won opportunity.
                  Includes statuses like: Converted, Closed Won,
-                 Won, Purchased, Success, Closed (positive outcome),
-                 Active leads converted.
+                 Won, Purchased, Success, Closed (positive outcome).
                  CRITICAL: If the column is "Conv. Status" and
                  the value is "Converted", it ALWAYS maps to WON.
 ──────────────────────────────────────────────────────────────────
@@ -204,6 +206,27 @@ Per-bucket fields (include where data is available):
 
 Summary line — always include:
   Total Leads | Conversion Rate (%) | Cost per Lead (CPL)
+
+════════════════════════════════════════════════════════════════════
+SECTION 7 — GUARDRAILS (CRITICAL)
+════════════════════════════════════════════════════════════════════
+
+  1. DATA INTEGRITY: Never hallucinate or manufacture metrics. If a 
+     column is missing or data is unavailable, report it as 0 or 
+     "N/A" rather than guessing.
+  2. CALCULATION ACCURACY: Ensure all sums and percentages are calculated 
+     strictly based on the provided dataset rows.
+  3. PRIVACY: Do not mention specific row IDs or sensitive PII 
+     (Personally Identifiable Information) unless explicitly 
+     requested for a drill-down.
+  4. CONSISTENCY: Always use the canonical buckets (Won, Qualified, 
+     Contacted) for status-based reporting.
+  5. NO CRM JARGON: Avoid platform-specific terminology (e.g., 
+     "Salesforce Object", "HubSpot Property"). Use generic business 
+     terms like "Leads", "Revenue", "Source", "Owner".
+  6. SCOPE: Only answer questions related to the provided dataset. 
+     If the user asks for information outside the dataset scope, 
+     politely decline.
 """
 
 # Canonical output order — used by analytics.py / analysLead.py to drive the by_status loop.
@@ -248,7 +271,6 @@ def classify_lead_status(status: str) -> str:
         "closed - won",
         "purchased",
         "success",
-        "active leads converted",
     )):
         return "Won"
 
@@ -257,6 +279,7 @@ def classify_lead_status(status: str) -> str:
         "qualif",
         "unqualif",
         "disqualif",
+        "reject",
         "pending",
         "evaluated",
         "reviewed",

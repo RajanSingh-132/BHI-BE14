@@ -22,6 +22,7 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
     status_stats: Dict[str, Dict[str, float]] = {}
     source_labels: Dict[str, str] = {"won": "Won", "qualified": "Qualified"}
     all_monthly: List[Dict[str, Any]] = []
+    user_stats: Dict[str, Dict[str, float]] = {}
 
     global_won_count: float = 0.0
     global_qual_count: float = 0.0
@@ -60,7 +61,10 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
             ],
         )
         rev_col = _schema_role_col(schema, "revenue_actual") or _find_col(
-            df, ["revenue", "sales", "amount", "deal_value", "revenue_actual", "income"]
+            df, ["revenue", "sales", "amount", "deal_value", "revenue_actual", "income", "deal_size", "value", "deal size", "deal value", "deal amount"]
+        )
+        owner_col = _schema_dim_col(schema, "owner") or _find_col(
+            df, ["owner", "assigned_to", "sales_rep", "agent", "user", "owner_name", "created_by"]
         )
         date_col = _schema_dim_col(schema, "date") or _find_col(
             df, [
@@ -84,6 +88,35 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
 
         if score_col:
             all_scores.extend(_to_numeric(df[score_col]).dropna().tolist())
+
+        # ── Global Revenues ──────────────────────────────────────────────────
+        if rev_col and rev_col in df.columns:
+            total_revenue_sum += float(_to_numeric(df[rev_col]).sum())
+            
+            is_won_global = pd.Series([False] * len(df), index=df.index)
+            if conv_col and conv_col in df.columns and conv_col != status_col:
+                v_num = _to_numeric(df[conv_col])
+                if v_num.isna().mean() < 0.8:
+                    is_won_global = v_num > 0
+                else:
+                    is_won_global = df[conv_col].astype(str).str.lower().str.contains(r"won|convert|success|purchased", regex=True)
+            elif status_col and status_col in df.columns:
+                is_won_global = df[status_col].astype(str).apply(lambda v: classify_lead_status(v) == "Won")
+            else:
+                is_won_global = pd.Series([True] * len(df), index=df.index)
+            
+            if is_won_global.any():
+                won_revenue_sum += float(_to_numeric(df[is_won_global][rev_col]).sum())
+
+            is_qual_global = pd.Series([False] * len(df), index=df.index)
+            if qual_col and qual_col in df.columns and qual_col != status_col:
+                v_num = _to_numeric(df[qual_col])
+                is_qual_global = v_num > 0
+            elif status_col and status_col in df.columns:
+                is_qual_global = df[status_col].astype(str).apply(lambda v: classify_lead_status(v) == "Qualified")
+
+            if is_qual_global.any():
+                qual_revenue_sum += float(_to_numeric(df[is_qual_global][rev_col]).sum())
 
         # ── Breakdowns ──────────────────────────────────────────────────────
         if source_col:
@@ -159,8 +192,7 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
                 else:
                     source_stats[src_name]["profit"] += (won_rev - won_cost)
 
-                total_revenue_sum += _to_numeric(group[rev_col]).sum() if rev_col and rev_col in group.columns else 0.0
-                won_revenue_sum += won_rev
+
 
                 if status_col and status_col in group.columns:
                     is_qual = group[status_col].astype(str).apply(
@@ -168,8 +200,23 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
                     )
                 else:
                     is_qual = pd.Series([False] * len(group), index=group.index)
-                qual_rev = _to_numeric(group[is_qual][rev_col]).sum() if rev_col and rev_col in group.columns else 0.0
-                qual_revenue_sum += qual_rev
+
+        if owner_col:
+            for owner, group in df.groupby(owner_col):
+                owner_name = str(owner).strip()
+                if not owner_name or owner_name.lower() in ["nan", "none"]:
+                    continue
+                
+                if owner_name not in user_stats:
+                    user_stats[owner_name] = {"leads": 0.0, "revenue": 0.0}
+                
+                if leads_col and leads_col in group.columns:
+                    user_stats[owner_name]["leads"] += _to_numeric(group[leads_col]).sum()
+                else:
+                    user_stats[owner_name]["leads"] += len(group)
+                
+                if rev_col and rev_col in group.columns:
+                    user_stats[owner_name]["revenue"] += _to_numeric(group[rev_col]).sum()
 
         won_added_global = False
         if conv_col and conv_col in df.columns and conv_col != status_col:
@@ -311,6 +358,18 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
     best_revenue_lead = rev_sorted[0] if rev_sorted else None
     worst_revenue_lead = rev_sorted[-1] if len(rev_sorted) > 1 else None
 
+    # Best User metrics
+    best_user_lead = None
+    best_user_revenue = None
+    if user_stats:
+        u_lead_sorted = sorted(user_stats.items(), key=lambda x: x[1]["leads"], reverse=True)
+        if u_lead_sorted:
+            best_user_lead = {"userName": u_lead_sorted[0][0], "leads": int(u_lead_sorted[0][1]["leads"])}
+        
+        u_rev_sorted = sorted(user_stats.items(), key=lambda x: x[1]["revenue"], reverse=True)
+        if u_rev_sorted:
+            best_user_revenue = {"userName": u_rev_sorted[0][0], "revenue": _round(u_rev_sorted[0][1]["revenue"])}
+
     return {
         "totalLeads":       total_leads,
         "qualifiedLeads":   qualified_leads,
@@ -331,5 +390,7 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
         "worstLead":        worst_lead,
         "bestRevenueLead":  best_revenue_lead,
         "worstRevenueLead": worst_revenue_lead,
+        "bestUserLead":     best_user_lead,
+        "bestUserRevenue":  best_user_revenue,
     }
 

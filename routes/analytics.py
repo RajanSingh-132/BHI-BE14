@@ -1,14 +1,14 @@
 """
 Analytics routes — returns frontend-compatible metric shapes.
 
-GET  /api/analytics?type=leads|revenue|ads|summary
+GET  /api/analytics?type=leads|Sales|ads|summary
 POST /api/submit-report
 
 Every GET response is shaped as:
     { "metrics": { <FrontendShape> }, "warnings": [...] }
 
 The summary type returns:
-    { "leads": {...}, "revenue": {...}, "ads": {...}, "warnings": [...] }
+    { "leads": {...}, "Sales": {...}, "ads": {...}, "warnings": [...] }
 """
 
 from __future__ import annotations
@@ -543,10 +543,10 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 @router.get("/analytics")
 async def get_analytics(
     request: Request,
-    analytics_type: Literal["leads", "revenue", "ads", "summary"] = Query(
+    analytics_type: Literal["leads", "Sales", "revenue", "ads", "summary"] = Query(
         ...,
         alias="type",
-        description="Analytics type: leads | revenue | ads | summary",
+        description="Analytics type: leads | Sales | ads | summary",
     ),
 ):
     """
@@ -576,7 +576,7 @@ async def get_analytics(
     if analytics_type == "leads":
         return {"metrics": _build_leads_metrics(dataset_entries), "warnings": warnings}
 
-    if analytics_type == "revenue":
+    if analytics_type in ["revenue", "Sales"]:
         return {"metrics": _build_revenue_metrics(dataset_entries), "warnings": warnings}
 
     if analytics_type == "ads":
