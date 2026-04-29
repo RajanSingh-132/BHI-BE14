@@ -175,3 +175,86 @@ def _agg_months(all_monthly: List[Dict[str, Any]]) -> Dict[str, Any]:
         agg[sk] = agg.get(sk, 0.0) + float(m["value"])
         labels[sk] = m["month"]
     return {"agg": agg, "labels": labels}
+
+
+def _grouped_monthly_trend(
+    df: pd.DataFrame,
+    date_col: str,
+    status_col: Optional[str],
+    classify_fn: Any,
+) -> List[Dict[str, Any]]:
+    """Group by Month (Jan-Dec) and Status (Won, Qualified, Contacted)."""
+    if date_col not in df.columns:
+        return []
+
+    temp = df.copy()
+    temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
+    if temp["_date"].isna().any():
+        fallback = pd.to_datetime(temp[date_col], errors="coerce")
+        temp["_date"] = temp["_date"].fillna(fallback)
+
+    temp = temp.dropna(subset=["_date"])
+    if temp.empty:
+        return []
+
+    # Latest year found in data
+    latest_year = temp["_date"].dt.year.max()
+
+    # Map status
+    if status_col and status_col in temp.columns:
+        temp["_status"] = temp[status_col].astype(str).apply(classify_fn)
+    else:
+        temp["_status"] = "Contacted"
+
+    # Fixed 12-month skeleton
+    months = []
+    month_names = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    for i, name in enumerate(month_names):
+        months.append({
+            "month": name,
+            "won": 0,
+            "qualified": 0,
+            "contacted": 0,
+            "leads": 0,
+            "_month_idx": i + 1
+        })
+
+    # Group by month and status
+    # We use .dt.month to align Jan with Jan regardless of year for this specific "Annual Trend" view
+    temp["_m_idx"] = temp["_date"].dt.month
+    grouped = temp.groupby(["_m_idx", "_status"]).size().unstack(fill_value=0)
+
+    for m_obj in months:
+        idx = m_obj["_month_idx"]
+        if idx in grouped.index:
+            row = grouped.loc[idx]
+            m_obj["won"] = int(row.get("Won", 0))
+            m_obj["qualified"] = int(row.get("Qualified", 0))
+            m_obj["contacted"] = int(row.get("Contacted", 0))
+            m_obj["leads"] = m_obj["won"] + m_obj["qualified"] + m_obj["contacted"]
+        del m_obj["_month_idx"]
+
+    return months
+
+
+def _agg_grouped_months(all_grouped_monthly: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Sum up grouped monthly data across multiple datasets."""
+    if not all_grouped_monthly:
+        return []
+
+    month_names = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    result = []
+    for name in month_names:
+        result.append({"month": name, "won": 0, "qualified": 0, "contacted": 0, "leads": 0})
+
+    for dataset_trend in all_grouped_monthly:
+        for m_data in dataset_trend:
+            m_name = m_data["month"]
+            for r in result:
+                if r["month"] == m_name:
+                    r["won"] += m_data.get("won", 0)
+                    r["qualified"] += m_data.get("qualified", 0)
+                    r["contacted"] += m_data.get("contacted", 0)
+                    r["leads"] += m_data.get("leads", 0)
+                    break
+    return result

@@ -1,12 +1,13 @@
 import pandas as pd
 from typing import Any, Dict, List
 from prompts.Lead_prompt import classify_lead_status, BUCKET_ORDER
-from routes.analytics import (
+from .analytics_utils import (
     _schema_role_col, _find_col, _to_numeric, _schema_dim_col,
-    _group_by_col, _monthly_trend, _agg_months, _round
+    _group_by_col, _monthly_trend, _agg_months, _round,
+    _grouped_monthly_trend, _agg_grouped_months
 )
 
-def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+def calculate_lead_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Return LeadMetrics-compatible dict."""
     total_leads = 0.0
     qualified_leads = 0.0
@@ -22,6 +23,7 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
     status_stats: Dict[str, Dict[str, float]] = {}
     source_labels: Dict[str, str] = {"won": "Won", "qualified": "Qualified"}
     all_monthly: List[Dict[str, Any]] = []
+    all_grouped_monthly: List[List[Dict[str, Any]]] = []
     user_stats: Dict[str, Dict[str, float]] = {}
 
     global_won_count: float = 0.0
@@ -58,10 +60,15 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
             df, [
                 "status", "stage", "lead_status", "pipeline_stage",
                 "state", "phase", "lead_stage", "funnel_stage",
+                "conv_status", "conversion_status"
             ],
         )
         rev_col = _schema_role_col(schema, "revenue_actual") or _find_col(
-            df, ["revenue", "sales", "amount", "deal_value", "revenue_actual", "income", "deal_size", "value", "deal size", "deal value", "deal amount"]
+            df, [
+                "revenue", "sales", "amount", "deal_value", "revenue_actual", 
+                "income", "deal_size", "value", "deal size", "deal value", 
+                "deal amount", "forecast_amount", "forecast amount (inr)"
+            ],
         )
         owner_col = _schema_dim_col(schema, "owner") or _find_col(
             df, ["owner", "assigned_to", "sales_rep", "agent", "user", "owner_name", "created_by"]
@@ -264,6 +271,7 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
 
         if date_col:
             all_monthly.extend(_monthly_trend(df, date_col, leads_col))
+            all_grouped_monthly.append(_grouped_monthly_trend(df, date_col, status_col, classify_lead_status))
 
     # ── Aggregate across datasets ────────────────────────────────────────────
     top_sources_list = sorted(
@@ -325,7 +333,6 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
             })
 
     contacted_revenue = max(0, total_revenue_sum - (won_revenue_sum + qual_revenue_sum))
-
     if not by_status:
         contacted = max(0, total_leads - (global_qual_count + global_won_count))
         if global_won_count > 0:
@@ -336,10 +343,16 @@ def _build_leads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any
             by_status.append({"status": "Contacted", "count": int(contacted), "revenue": _round(contacted_revenue)})
 
     month_data = _agg_months(all_monthly)
-    monthly_trend = [
+    # Generic trend for backward compatibility (if needed by other views)
+    monthly_trend_legacy = [
         {"month": month_data["labels"][k], "leads": int(month_data["agg"][k])}
         for k in sorted(month_data["agg"].keys())
     ][-12:]
+
+    # New grouped trend (Jan-Dec full year)
+    monthly_trend = _agg_grouped_months(all_grouped_monthly)
+    if not monthly_trend:
+        monthly_trend = monthly_trend_legacy
 
     total_leads     = int(total_leads)
     qualified_leads = int(qualified_leads)

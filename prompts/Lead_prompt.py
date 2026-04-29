@@ -33,8 +33,7 @@ match found per role.
                     state, phase, lead_stage, funnel_stage,
                     conv_status, conversion_status
 
-  REVENUE         → revenue, sales, amount, deal_value,
-                    revenue_actual, income
+  REVENUE / AMOUNT → revenue, sales, amount, deal_value, revenue_actual, income, deal_amount, forecast_amount
 
   COST / SPEND    → spend, cost, total_spend, budget,
                     ad_spend, marketing_spend
@@ -206,6 +205,26 @@ Per-bucket fields (include where data is available):
 
 Summary line — always include:
   Total Leads | Conversion Rate (%) | Cost per Lead (CPL)
+ 
+ ════════════════════════════════════════════════════════════════════
+SECTION 8 — LEAD ACQUISITION TRENDS  (MONTHLY GROUPING)
+════════════════════════════════════════════════════════════════════
+
+When reporting historical trends, always provide a monthly breakdown 
+from January to December (full calendar year). 
+
+Each month must include the following metrics:
+  1. Won        → count of leads in Won bucket
+  2. Qualified  → count of leads in Qualified bucket
+  3. Contacted  → count of leads in Contacted bucket
+  4. Total      → sum of all leads for that month
+
+Format:
+  January:   Won=X, Qual=Y, Cont=Z, Total=A
+  ...
+  December:  Won=X, Qual=Y, Cont=Z, Total=A
+
+If data for a specific month is missing, report it as 0 for all categories.
 
 ════════════════════════════════════════════════════════════════════
 SECTION 7 — GUARDRAILS (CRITICAL)

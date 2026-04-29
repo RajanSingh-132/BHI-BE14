@@ -22,7 +22,12 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from mongo_client import mongo_client as _mongo
-from prompts.Lead_prompt import classify_lead_status, BUCKET_ORDER   # ← single source of truth
+from prompts.Lead_prompt import classify_lead_status, BUCKET_ORDER
+from .analytics_utils import (
+    _round, _to_numeric, _find_col, _schema_role_col, _schema_dim_col,
+    _group_by_col, _monthly_trend, _agg_named_groups, _agg_months,
+    _grouped_monthly_trend, _agg_grouped_months
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,170 +42,6 @@ def _get_session_id(request: Request) -> str:
     return sid
 
 
-# ─── Numeric helpers ──────────────────────────────────────────────────────────
-
-def _round(value: Any, digits: int = 2) -> float:
-    try:
-        return round(float(value), digits)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _to_numeric(series: pd.Series) -> pd.Series:
-    cleaned = (
-        series.astype(str)
-        .str.replace(r"[,\$₹€£%\s]", "", regex=True)
-        .str.strip()
-    )
-    return pd.to_numeric(cleaned, errors="coerce")
-
-
-# ─── Column detection ─────────────────────────────────────────────────────────
-
-def _find_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    """
-    Find the first DataFrame column that matches any candidate name.
-    Tries exact → normalized (underscore/dash/space folded) → substring match.
-    """
-    def norm(s: str) -> str:
-        return s.lower().replace("_", " ").replace("-", " ").strip()
-
-    norm_to_orig = {norm(c): c for c in df.columns}
-    lower_to_orig = {c.lower(): c for c in df.columns}
-
-    for cand in candidates:
-        found = lower_to_orig.get(cand.lower()) or norm_to_orig.get(norm(cand))
-        if found:
-            return found
-
-    # substring partial match
-    for cand in candidates:
-        nc = norm(cand)
-        for col in df.columns:
-            nc_col = norm(col)
-            if nc in nc_col or nc_col in nc:
-                return col
-
-    return None
-
-
-def _schema_role_col(schema: Dict[str, Any], *roles: str) -> Optional[str]:
-    columns = (schema or {}).get("columns", {})
-    for role in roles:
-        for col_name, meta in columns.items():
-            if (meta or {}).get("semantic_role") == role:
-                return col_name
-    return None
-
-
-def _schema_dim_col(schema: Dict[str, Any], *dims: str) -> Optional[str]:
-    dim_map = (schema or {}).get("dimension_map", {})
-    for dim in dims:
-        col = dim_map.get(dim)
-        if col:
-            return col
-    return None
-
-
-# ─── Aggregation helpers ──────────────────────────────────────────────────────
-
-def _group_by_col(
-    df: pd.DataFrame,
-    group_col: str,
-    value_col: Optional[str] = None,
-    top_n: int = 10,
-) -> List[Dict[str, Any]]:
-    """Sum value_col (or count rows) grouped by group_col. Returns top_n desc."""
-    if group_col not in df.columns:
-        return []
-
-    temp = pd.DataFrame({"group": df[group_col].astype(str).str.strip()})
-
-    if value_col and value_col in df.columns:
-        temp["val"] = _to_numeric(df[value_col])
-    else:
-        temp["val"] = 1.0
-
-    temp = temp[
-        temp["group"].notna()
-        & (temp["group"] != "")
-        & (temp["group"].str.lower() != "nan")
-        & (temp["group"].str.lower() != "none")
-    ]
-    if temp.empty:
-        return []
-
-    grouped = (
-        temp.groupby("group")["val"]
-        .sum()
-        .dropna()
-        .sort_values(ascending=False)
-        .head(top_n)
-    )
-    return [
-        {"name": str(k), "value": _round(v)}
-        for k, v in grouped.items()
-        if pd.notna(v)
-    ]
-
-
-def _monthly_trend(
-    df: pd.DataFrame,
-    date_col: str,
-    value_col: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Group by calendar month. Returns list of {"sort_key":..., "month":..., "value":...}."""
-    if date_col not in df.columns:
-        return []
-
-    temp = df.copy()
-    temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
-    if temp["_date"].isna().any():
-        fallback = pd.to_datetime(temp[date_col], errors="coerce")
-        temp["_date"] = temp["_date"].fillna(fallback)
-
-    temp = temp.dropna(subset=["_date"])
-    if temp.empty:
-        return []
-
-    temp["_month"] = temp["_date"].dt.to_period("M")
-
-    if value_col and value_col in df.columns:
-        temp["_val"] = _to_numeric(temp[value_col])
-        grouped = temp.groupby("_month")["_val"].sum()
-    else:
-        grouped = temp.groupby("_month")["_date"].count()
-
-    result = []
-    for period, val in grouped.sort_index().tail(12).items():
-        result.append({
-            "sort_key": str(period),
-            "month": period.strftime("%b '%y"),
-            "value": _round(val),
-        })
-    return result
-
-
-def _agg_named_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Collapse {"name":..., "value":...} groups from multiple datasets by summing."""
-    agg: Dict[str, float] = {}
-    for g in groups:
-        agg[g["name"]] = agg.get(g["name"], 0.0) + float(g["value"])
-    return sorted(
-        [{"name": k, "value": v} for k, v in agg.items()],
-        key=lambda x: -x["value"],
-    )
-
-
-def _agg_months(all_monthly: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Aggregate monthly items from multiple datasets by sort_key."""
-    agg: Dict[str, float] = {}
-    labels: Dict[str, str] = {}
-    for m in all_monthly:
-        sk = m["sort_key"]
-        agg[sk] = agg.get(sk, 0.0) + float(m["value"])
-        labels[sk] = m["month"]
-    return {"agg": agg, "labels": labels}
 
 
 # ─── MongoDB data loading ─────────────────────────────────────────────────────
@@ -252,163 +93,9 @@ def _load_session_datasets(
 
 # ─── LEADS builder ────────────────────────────────────────────────────────────
 
-from routes.analysLead import _build_leads_metrics
+from .analysLead import calculate_lead_metrics
+from .analysSales import calculate_revenue_metrics
 
-def _build_revenue_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return RevenueMetrics-compatible dict."""
-    total_revenue = 0.0
-    expected_revenue = 0.0
-    total_spend = 0.0
-    closed_deals = 0
-    all_deal_amounts: List[float] = []
-    all_regions: List[Dict[str, Any]] = []
-    all_monthly: List[Dict[str, Any]] = []
-
-    for entry in dataset_entries:
-        df = pd.DataFrame(entry["data"])
-        if df.empty:
-            continue
-        schema = entry.get("schema", {})
-
-        revenue_col = _schema_role_col(schema, "revenue_actual") or _find_col(
-            df, [
-                "revenue", "actual_revenue", "total_revenue", "sales",
-                "income", "amount", "deal_value", "revenue_actual",
-            ],
-        )
-        expected_col = _schema_role_col(schema, "revenue_expected") or _find_col(
-            df, [
-                "expected_revenue", "pipeline_value", "projected_revenue",
-                "forecast", "expected_value", "potential_revenue",
-            ],
-        )
-        deal_col = _schema_role_col(schema, "deal_amount") or _find_col(
-            df, [
-                "deal_amount", "deal_size", "deal_value", "contract_value",
-                "opportunity_value", "deal_revenue",
-            ],
-        )
-        spend_col = _schema_role_col(schema, "cost_total") or _find_col(
-            df, ["spend", "cost", "total_spend", "budget", "expense", "cost_total"]
-        )
-        closed_col = _find_col(
-            df, ["closed_deals", "won_deals", "closed_won", "deals_closed", "num_won"],
-        )
-        region_col = _schema_dim_col(schema, "region", "territory") or _find_col(
-            df, [
-                "region", "territory", "area", "country", "state",
-                "city", "location", "zone", "market", "geo",
-            ],
-        )
-        date_col = _schema_dim_col(schema, "date", "period") or _find_col(
-            df, [
-                "date", "close_date", "month", "period", "quarter",
-                "timestamp", "created_at", "record_date",
-            ],
-        )
-
-        primary_rev_col = revenue_col or deal_col
-
-        if primary_rev_col:
-            v = _to_numeric(df[primary_rev_col]).sum()
-            if pd.notna(v):
-                total_revenue += float(v)
-            all_deal_amounts.extend(_to_numeric(df[primary_rev_col]).dropna().tolist())
-
-        prob_col = _schema_role_col(schema, "status_probability") or _find_col(
-            df, ["probability", "deal_probability", "win_probability", "status_probability"]
-        )
-        is_conv_col = _schema_role_col(schema, "is_converted") or _find_col(
-            df, ["converted", "is_converted", "is converted"]
-        )
-
-        if date_col and (deal_col or expected_col) and prob_col and is_conv_col:
-            val_base = deal_col or expected_col
-            df_p = df.copy()
-            df_p["_val"]  = _to_numeric(df_p[val_base]).fillna(0)
-            df_p["_prob"] = _to_numeric(df_p[prob_col]).fillna(0)
-            if df_p["_prob"].max() > 1.1:
-                df_p["_prob"] = df_p["_prob"] / 100.0
-            mask = (
-                df_p[date_col].notna()
-                & (df_p[date_col].astype(str).str.strip() != "")
-                & (df_p["_val"] > 0)
-                & (df_p[is_conv_col].astype(str).str.lower().str.contains("yes|true|1", regex=True))
-            )
-            expected_revenue += float((df_p[mask]["_val"] * df_p[mask]["_prob"]).sum())
-
-        if spend_col:
-            v = _to_numeric(df[spend_col]).sum()
-            if pd.notna(v):
-                total_spend += float(v)
-
-        if closed_col:
-            v = _to_numeric(df[closed_col]).sum()
-            if pd.notna(v):
-                closed_deals += int(v)
-        else:
-            status_col = _find_col(df, ["status", "stage", "deal_status"])
-            if status_col:
-                mask = df[status_col].astype(str).str.lower().str.contains(
-                    r"closed|won|complet|success", regex=True
-                )
-                closed_deals += int(mask.sum())
-            else:
-                closed_deals += len(df)
-
-        if region_col:
-            all_regions.extend(_group_by_col(df, region_col, primary_rev_col))
-
-        if date_col:
-            all_monthly.extend(_monthly_trend(df, date_col, primary_rev_col))
-
-    regions_agg = _agg_named_groups(all_regions)[:10]
-    by_region = [
-        {"region": r["name"], "revenue": _round(r["value"])}
-        for r in regions_agg
-    ]
-
-    month_data = _agg_months(all_monthly)
-    monthly_revenue = [
-        {"month": month_data["labels"][k], "revenue": _round(month_data["agg"][k])}
-        for k in sorted(month_data["agg"].keys())
-    ][-12:]
-
-    total_revenue = _round(total_revenue)
-    avg_deal_size = (
-        _round(sum(all_deal_amounts) / len(all_deal_amounts))
-        if all_deal_amounts else 0.0
-    )
-
-    growth_rate = 0.0
-    if len(monthly_revenue) >= 2:
-        first = monthly_revenue[0]["revenue"]
-        last  = monthly_revenue[-1]["revenue"]
-        if first > 0:
-            growth_rate = _round(((last - first) / first) * 100)
-
-    pipeline_value = _round(expected_revenue) if expected_revenue > 0 else 0.0
-    roi = (
-        _round(((total_revenue - total_spend) / total_spend) * 100)
-        if total_spend > 0 else 0.0
-    )
-
-    best_revenue  = by_region[0]  if by_region          else None
-    worst_revenue = by_region[-1] if len(by_region) > 1 else None
-
-    return {
-        "totalRevenue":  total_revenue,
-        "avgDealSize":   avg_deal_size,
-        "closedDeals":   closed_deals,
-        "pipelineValue": pipeline_value,
-        "growthRate":    growth_rate,
-        "totalSpend":    _round(total_spend),
-        "roi":           roi,
-        "byRegion":      by_region,
-        "monthlyRevenue": monthly_revenue,
-        "bestRevenue":   best_revenue,
-        "worstRevenue":  worst_revenue,
-    }
 
 
 # ─── ADS builder ─────────────────────────────────────────────────────────────
@@ -574,18 +261,18 @@ async def get_analytics(
         )
 
     if analytics_type == "leads":
-        return {"metrics": _build_leads_metrics(dataset_entries), "warnings": warnings}
+        return {"metrics": calculate_lead_metrics(dataset_entries), "warnings": warnings}
 
     if analytics_type in ["revenue", "Sales"]:
-        return {"metrics": _build_revenue_metrics(dataset_entries), "warnings": warnings}
+        return {"metrics": calculate_revenue_metrics(dataset_entries), "warnings": warnings}
 
     if analytics_type == "ads":
         return {"metrics": _build_ads_metrics(dataset_entries), "warnings": warnings}
 
     # summary
     return {
-        "leads":    {"metrics": _build_leads_metrics(dataset_entries)},
-        "revenue":  {"metrics": _build_revenue_metrics(dataset_entries)},
+        "leads":    {"metrics": calculate_lead_metrics(dataset_entries)},
+        "Sales":    {"metrics": calculate_revenue_metrics(dataset_entries)},
         "ads":      {"metrics": _build_ads_metrics(dataset_entries)},
         "warnings": warnings,
     }
@@ -619,8 +306,8 @@ async def submit_report(request: Request):
         "session_id":   session_id,
         "datasets":     active_datasets,
         "submitted_at": submitted_at,
-        "leads":        _build_leads_metrics(dataset_entries),
-        "revenue":      _build_revenue_metrics(dataset_entries),
+        "leads":        calculate_lead_metrics(dataset_entries),
+        "Sales":        calculate_revenue_metrics(dataset_entries),
         "ads":          _build_ads_metrics(dataset_entries),
         "warnings":     warnings,
     }

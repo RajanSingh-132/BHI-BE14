@@ -47,6 +47,7 @@ from mongo_client import mongo_client, _make_dataset_key
 from prompts.analysis_prompt import ANALYSIS_PROMPT, MULTI_DATASET_ANALYSIS_PROMPT
 from prompts.intent_prompt import INTENT_EXTRACTION_PROMPT
 from prompts.Lead_prompt import LEADS_SYSTEM_PROMPT
+from prompts.Sales_prompt import SALES_SYSTEM_PROMPT
 from prompt import SYSTEM_PROMPT
 from rag_retriever import RAGRetriever
 from services.calculation_engine import calculate as run_calculation
@@ -445,7 +446,12 @@ def _analyze_results_multi(
 
     # Use the first dataset's type to drive KPI card selection
     first_type = dataset_results[0].get("dataset_type", "") if dataset_results else ""
-    domain_knowledge = LEADS_SYSTEM_PROMPT if first_type == "leads" else ""
+    
+    domain_knowledge = ""
+    if first_type == "leads":
+        domain_knowledge = LEADS_SYSTEM_PROMPT
+    elif first_type == "Sales":
+        domain_knowledge = SALES_SYSTEM_PROMPT
 
     prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
         dataset_names            = dataset_names,
@@ -497,7 +503,12 @@ def _analyze_results(
     history_section = f"\nConversation History:\n{history_text}\n" if history_text else ""
 
     dataset_type = schema_profile.get("dataset_type", "generic")
-    domain_knowledge = LEADS_SYSTEM_PROMPT if dataset_type == "leads" else ""
+    
+    domain_knowledge = ""
+    if dataset_type == "leads":
+        domain_knowledge = LEADS_SYSTEM_PROMPT
+    elif dataset_type == "Sales":
+        domain_knowledge = SALES_SYSTEM_PROMPT
 
     prompt = ANALYSIS_PROMPT.format(
         dataset_type             = dataset_type,
