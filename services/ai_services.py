@@ -48,6 +48,7 @@ from prompts.analysis_prompt import ANALYSIS_PROMPT, MULTI_DATASET_ANALYSIS_PROM
 from prompts.intent_prompt import INTENT_EXTRACTION_PROMPT
 from prompts.Lead_prompt import LEADS_SYSTEM_PROMPT
 from prompts.Sales_prompt import SALES_SYSTEM_PROMPT
+from prompts.productivity_prompt import PRODUCTIVITY_SYSTEM_PROMPT
 from prompt import SYSTEM_PROMPT
 from rag_retriever import RAGRetriever
 from services.calculation_engine import calculate as run_calculation
@@ -452,6 +453,8 @@ def _analyze_results_multi(
         domain_knowledge = LEADS_SYSTEM_PROMPT
     elif first_type == "Sales":
         domain_knowledge = SALES_SYSTEM_PROMPT
+    elif first_type == "Productivity":
+        domain_knowledge = PRODUCTIVITY_SYSTEM_PROMPT
 
     prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
         dataset_names            = dataset_names,
@@ -509,6 +512,8 @@ def _analyze_results(
         domain_knowledge = LEADS_SYSTEM_PROMPT
     elif dataset_type == "Sales":
         domain_knowledge = SALES_SYSTEM_PROMPT
+    elif dataset_type == "Productivity":
+        domain_knowledge = PRODUCTIVITY_SYSTEM_PROMPT
 
     prompt = ANALYSIS_PROMPT.format(
         dataset_type             = dataset_type,

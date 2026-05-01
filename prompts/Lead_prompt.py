@@ -33,7 +33,8 @@ match found per role.
                     state, phase, lead_stage, funnel_stage,
                     conv_status, conversion_status
 
-  REVENUE / AMOUNT → revenue, sales, amount, deal_value, revenue_actual, income, deal_amount, forecast_amount
+  REVENUE         → revenue, sales, amount, deal_value,
+                    revenue_actual, income
 
   COST / SPEND    → spend, cost, total_spend, budget,
                     ad_spend, marketing_spend
@@ -164,7 +165,7 @@ Profit
 Pipeline Revenue
   = SUM(Deal Value × Win Probability)
   WHERE Converted = Yes AND Deal Value > 0 AND Close Date exists.
-  Note: normalise probability to 0–1 range if stored as 0–100.
+  Note: normalise probability to 0–1 range if stored as 0–100
 
 Growth Rate (%)
   = ((Last Month Revenue − First Month Revenue)

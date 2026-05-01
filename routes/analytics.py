@@ -95,6 +95,7 @@ def _load_session_datasets(
 
 from .analysLead import calculate_lead_metrics
 from .analysSales import calculate_revenue_metrics
+from .analysProductivity import calculate_productivity_metrics
 
 
 
@@ -230,10 +231,10 @@ def _build_ads_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 @router.get("/analytics")
 async def get_analytics(
     request: Request,
-    analytics_type: Literal["leads", "Sales", "revenue", "ads", "summary"] = Query(
+    analytics_type: Literal["leads", "Sales", "revenue", "Productivity", "ads", "summary"] = Query(
         ...,
         alias="type",
-        description="Analytics type: leads | Sales | ads | summary",
+        description="Analytics type: leads | Sales | Productivity | summary",
     ),
 ):
     """
@@ -269,12 +270,15 @@ async def get_analytics(
     if analytics_type == "ads":
         return {"metrics": _build_ads_metrics(dataset_entries), "warnings": warnings}
 
+    if analytics_type == "Productivity":
+        return {"metrics": calculate_productivity_metrics(dataset_entries), "warnings": warnings}
+
     # summary
     return {
-        "leads":    {"metrics": calculate_lead_metrics(dataset_entries)},
-        "Sales":    {"metrics": calculate_revenue_metrics(dataset_entries)},
-        "ads":      {"metrics": _build_ads_metrics(dataset_entries)},
-        "warnings": warnings,
+        "leads":        {"metrics": calculate_lead_metrics(dataset_entries)},
+        "Sales":        {"metrics": calculate_revenue_metrics(dataset_entries)},
+        "Productivity": {"metrics": calculate_productivity_metrics(dataset_entries)},
+        "warnings":     warnings,
     }
 
 
@@ -308,7 +312,7 @@ async def submit_report(request: Request):
         "submitted_at": submitted_at,
         "leads":        calculate_lead_metrics(dataset_entries),
         "Sales":        calculate_revenue_metrics(dataset_entries),
-        "ads":          _build_ads_metrics(dataset_entries),
+        "Productivity": calculate_productivity_metrics(dataset_entries),
         "warnings":     warnings,
     }
 
