@@ -118,6 +118,28 @@ def _group_by_col(
     ]
 
 
+def _smart_parse_dates(series: pd.Series) -> pd.Series:
+    """
+    Auto-detect whether dates are year-first (YYYY-MM-DD) or day-first (DD-MM-YYYY)
+    by inspecting the first non-null value, then parse accordingly.
+    Falls back to pandas inference if the format is unrecognised.
+    """
+    sample = series.dropna().astype(str).str.strip()
+    if sample.empty:
+        return pd.to_datetime(series, errors="coerce")
+
+    first = sample.iloc[0]
+    # Year-first: starts with 4-digit year (e.g. 2026-02-19 or 2026/02/19)
+    import re
+    if re.match(r'^\d{4}[-/]', first):
+        return pd.to_datetime(series, dayfirst=False, errors="coerce")
+    # Day-first: starts with 1-2 digit day (e.g. 19-02-2026 or 19/02/2026)
+    elif re.match(r'^\d{1,2}[-/]', first):
+        return pd.to_datetime(series, dayfirst=True, errors="coerce")
+    # Unknown format — let pandas infer
+    return pd.to_datetime(series, errors="coerce")
+
+
 def _monthly_trend(
     df: pd.DataFrame,
     date_col: str,
@@ -128,10 +150,7 @@ def _monthly_trend(
         return []
 
     temp = df.copy()
-    temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
-    if temp["_date"].isna().any():
-        fallback = pd.to_datetime(temp[date_col], errors="coerce")
-        temp["_date"] = temp["_date"].fillna(fallback)
+    temp["_date"] = _smart_parse_dates(temp[date_col])
 
     temp = temp.dropna(subset=["_date"])
     if temp.empty:
@@ -188,10 +207,7 @@ def _grouped_monthly_trend(
         return []
 
     temp = df.copy()
-    temp["_date"] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
-    if temp["_date"].isna().any():
-        fallback = pd.to_datetime(temp[date_col], errors="coerce")
-        temp["_date"] = temp["_date"].fillna(fallback)
+    temp["_date"] = _smart_parse_dates(temp[date_col])
 
     temp = temp.dropna(subset=["_date"])
     if temp.empty:

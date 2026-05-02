@@ -69,6 +69,34 @@ The analysis must center on these primary KPIs:
 ● RESOLUTION RATE: Individual efficiency of team members.
 
 ════════════════════════════════════════════════════════════════════════════════
+SECTION 7 — PROJECT & MILESTONE SUMMARY
+════════════════════════════════════════════════════════════════════════════════
+You must analyze the 'projectSummary' table which provides a dual-row breakdown per project:
+● ROW STRUCTURE:
+  - PRIMARY ROW: Shows the Project Name and the 'Total' volume of tasks per Milestone.
+  - SECONDARY ROW (COMPLETED): Labeled as 'Completed', this shows the subset of tasks that have reached 100% completion or a 'Completed' status.
+● DYNAMIC COLUMNS:
+  - If Milestone Files are uploaded, the columns represent specific phases (e.g., Planning, Design, Testing).
+● ANALYSIS GOAL: 
+  - Compare the 'Total' vs 'Completed' rows for each project. 
+  - Identify which Milestone phases are dragging (high Total but low Completed) and which are highly efficient.
+● TERMINOLOGY: Explicitly mention completion levels when discussing project health.
+
+════════════════════════════════════════════════════════════════════════════════
+SECTION 8 — PROJECT WISE CURRENT DATE MILESTONE ANALYSIS SUMMARY
+════════════════════════════════════════════════════════════════════════════════
+You must analyze the 'recentMilestones' table which provides a snapshot of the project's overall deadline vs its current progress:
+● DATA DEFINITIONS:
+  - LAST DATE: This is the absolute Maximum End Date for the entire project in the dataset.
+  - MILESTONE NAME & STATUS: This reflects the most recent milestone record that is due on or before today.
+● ANALYSIS GOAL:
+  - Compare the 'Last Date' (Final Deadline) with the current 'Milestone Name' to see how far the project is from completion.
+  - Call out projects where the current status is stalled (e.g., 'In Progress') despite the 'Last Date' being very close or already passed.
+● INSIGHT: Use this to distinguish between "Current Progress" (Milestone/Status) and the "Ultimate Goal" (Last Date).
+
+
+
+════════════════════════════════════════════════════════════════════════════════
 STRICT ANALYSIS RULES
 ════════════════════════════════════════════════════════════════════════════════
 1. NO HALLUCINATION: Only use the exact counts and rates provided in the 'metrics' JSON.
