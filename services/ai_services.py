@@ -46,9 +46,9 @@ from google.genai import types as _genai_types
 from mongo_client import mongo_client, _make_dataset_key
 from prompts.analysis_prompt import ANALYSIS_PROMPT, MULTI_DATASET_ANALYSIS_PROMPT
 from prompts.intent_prompt import INTENT_EXTRACTION_PROMPT
-from prompts.Lead_prompt import LEADS_SYSTEM_PROMPT
+from prompts.Lead_prompt import LEADS_SYSTEM_PROMPT, LEADS_MULTI_PROMPT
 from prompts.Sales_prompt import SALES_SYSTEM_PROMPT
-from prompts.productivity_prompt import PRODUCTIVITY_SYSTEM_PROMPT
+from prompts.productivity_prompt import PRODUCTIVITY_SYSTEM_PROMPT, PRODUCTIVITY_MULTI_DATASET_PROMPT
 from prompt import SYSTEM_PROMPT
 from rag_retriever import RAGRetriever
 from services.calculation_engine import calculate as run_calculation
@@ -445,24 +445,41 @@ def _analyze_results_multi(
     dataset_names  = ", ".join(dr["display_name"] for dr in dataset_results)
     results_json   = json.dumps(labeled, indent=2, default=str)
 
-    # Use the first dataset's type to drive KPI card selection
+    # Use the first dataset's type to drive KPI card selection and prompt routing
     first_type = dataset_results[0].get("dataset_type", "") if dataset_results else ""
-    
+    all_types  = [dr.get("dataset_type", "") for dr in dataset_results]
+
     domain_knowledge = ""
     if first_type == "leads":
-        domain_knowledge = LEADS_SYSTEM_PROMPT
+        domain_knowledge = LEADS_MULTI_PROMPT
     elif first_type == "Sales":
         domain_knowledge = SALES_SYSTEM_PROMPT
     elif first_type == "Productivity":
         domain_knowledge = PRODUCTIVITY_SYSTEM_PROMPT
 
-    prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
-        dataset_names            = dataset_names,
-        query                    = query,
-        dataset_results_json     = results_json,
-        kpi_display_instructions = get_fields_for_prompt(query, first_type),
-        domain_knowledge         = domain_knowledge,
-    ) + history_section
+    # ── Dynamic prompt routing ────────────────────────────────────────────────
+    # Use the specialized Productivity multi-dataset prompt when ALL active
+    # datasets are Productivity-type (Milestone or Bug tracker). This mirrors
+    # how MULTI_DATASET_ANALYSIS_PROMPT is used for Leads/Sales but is tailored
+    # for Milestone-Bug correlation and team workload analysis.
+    all_productivity = all(t == "Productivity" for t in all_types if t)
+
+    if all_productivity:
+        prompt = PRODUCTIVITY_MULTI_DATASET_PROMPT.format(
+            dataset_names            = dataset_names,
+            query                    = query,
+            dataset_results_json     = results_json,
+            kpi_display_instructions = get_fields_for_prompt(query, first_type),
+        ) + history_section
+        logger.info("[ANALYSIS] Using PRODUCTIVITY_MULTI_DATASET_PROMPT")
+    else:
+        prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
+            dataset_names            = dataset_names,
+            query                    = query,
+            dataset_results_json     = results_json,
+            kpi_display_instructions = get_fields_for_prompt(query, first_type),
+            domain_knowledge         = domain_knowledge,
+        ) + history_section
 
     raw = _gemini_generate(
         prompt,

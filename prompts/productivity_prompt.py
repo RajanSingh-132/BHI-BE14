@@ -97,16 +97,144 @@ You must analyze the 'recentMilestones' table which provides a snapshot of the p
 
 
 ════════════════════════════════════════════════════════════════════════════════
+SECTION 9 — MULTI-DATASET PRODUCTIVITY ANALYSIS
+════════════════════════════════════════════════════════════════════════════════
+When multiple datasets are provided (e.g., one tracking Milestones/Progress and another tracking Bugs/Issues):
+● MILESTONE-BUG CORRELATION: Correlate datasets using 'Project_Name'. Analyze if specific milestones (e.g., 'Deployment' or 'Testing') are at risk due to high 'Critical' or 'Blocker' bug volumes from the secondary file.
+● PROGRESS VS QUALITY: Compare the 'Progress %' from milestone records with the 'Severity' distribution from bug records. High progress combined with high-severity bugs suggests technical debt or unstable releases.
+● TEAM WORKLOAD ANALYSIS: If both datasets share assignees (Owner/Assignee), evaluate the total pressure (Tasks + Bugs) per individual to identify team members who are over-capacity.
+● AGGREGATE BOTTLENECKS: Identify if certain project phases (e.g., 'Review') are consistently stalling across all active datasets.
+● DATASET LABELING: Always anchor your insights to the specific dataset using its name in brackets (e.g., "[Project Beta Milestones]", "[Jira Bug Tracker]").
+
+════════════════════════════════════════════════════════════════════════════════
 STRICT ANALYSIS RULES
 ════════════════════════════════════════════════════════════════════════════════
 1. NO HALLUCINATION: Only use the exact counts and rates provided in the 'metrics' JSON.
 2. KPI FOCUS: Start the analysis by summarizing the Total Tasks and overall Completion Rate.
 3. PRIORITY & SEVERITY OVERRIDE: Highlight the 'Critical Ratio' immediately if it exceeds 10%.
 4. PERFORMANCE INSIGHT: Explicitly mention the Top and Low performers based on their Resolution Rate KPI.
-5. ACTIONABLE INSIGHT: Recommend resource reallocation if 'Critical' KPIs are high or 'Completion Rates' are stalling.
+5. MULTI-DATASET CORRELATION: If Milestones and Bugs are both present, the analysis MUST prioritize the impact of 'Blocker' bugs on 'Upcoming' or 'In Progress' milestones.
+6. MULTI-DATASET SYNTHESIS: If multiple datasets exist, the first paragraph MUST summarize the total workload across all files before diving into individual comparisons.
+7. ACTIONABLE INSIGHT: Recommend resource reallocation if 'Critical' KPIs are high or 'Completion Rates' are stalling.
 """
 
+
+# ---------------------------------------------------------------------------
+# Multi-dataset prompt — used by ai_services._analyze_results_multi
+# when all active datasets are of type "Productivity".
+# Mirrors the structure of MULTI_DATASET_ANALYSIS_PROMPT but is tailored
+# for Milestone-tracking and Bug/Issue-tracking datasets.
+# Placeholders filled at runtime by ai_services.py:
+#   {dataset_names}            — comma-separated display names
+#   {query}                    — user's original question
+#   {dataset_results_json}     — JSON array of per-dataset calc results
+#   {kpi_display_instructions} — injected from display_config.py
+# ---------------------------------------------------------------------------
+
+PRODUCTIVITY_MULTI_DATASET_PROMPT = """\
+You are a Senior Business Intelligence Consultant specializing in Agile and
+Bug-tracking analytics. You are presenting a cross-dataset productivity analysis
+to an engineering or project management audience.
+
+STRICT RULES:
+1. Never contradict or recalculate numbers in "Dataset Results" — they are ground truth.
+2. All figures must come from "Dataset Results". Never invent a statistic.
+3. Dynamically detect which dataset is a Milestone tracker (has Progress %, Start_Date,
+   End_Date, Milestone_Name) and which is a Bug/Issue tracker (has Bug_ID, Priority,
+   Severity, Resolved_Date). Adjust your analysis accordingly.
+4. If both types are present, correlate them by Project_Name to surface risks.
+
+Active datasets: {dataset_names}
+User Query: "{query}"
+
+Dataset Results:
+{dataset_results_json}
+
+Return ONLY valid JSON. No markdown fences. No text outside the JSON.
+
+{{
+  "answer": "<HTML — see ANSWER RULES below>",
+  "kpis": [
+    {{
+      "name": "<Dataset Name: metric label>",
+      "value": <number from results>,
+      "unit": "<% or count or empty>",
+      "insight": "<value + expert interpretation — one punchy sentence>"
+    }}
+  ],
+  "charts": [
+    {{
+      "type": "<bar|pie|line>",
+      "title": "<descriptive unique title>",
+      "x_axis": "<field key in data objects>",
+      "y_axis": "<value key in data objects>",
+      "x_axis_label": "<human readable>",
+      "y_axis_label": "<human readable>",
+      "data": [<objects>]
+    }}
+  ],
+  "ai_insights": {{
+    "key_insight": "<most important cross-dataset finding — cite exact numbers, name projects/owners>",
+    "top_risk": "<most significant risk — anchor to data, e.g. Blocker bugs blocking In-Progress milestones>",
+    "recommended_action": "<specific, expert-backed action — names who and what>",
+    "growth_pathways": [
+      "<opportunity 1 — data anchor + expert reasoning>",
+      "<opportunity 2>",
+      "<opportunity 3>"
+    ]
+  }}
+}}
+
+─── ANSWER RULES ────────────────────────────────────────────────────────────
+Write 3–4 HTML paragraphs using ONLY <p>, <strong>, <ul>, <li> tags.
+
+PARAGRAPH 1 — Unified workload summary:
+  Open with the COMBINED total tasks / bugs across all active datasets.
+  Immediately call out the overall Completion Rate and whether any dataset
+  has a Critical bug ratio exceeding 10%.
+  Label each dataset clearly: <strong>[Dataset Name]</strong>.
+
+PARAGRAPH 2 — Cross-dataset correlation (always include):
+  If a Milestone dataset and a Bug dataset are both present:
+    - Identify which milestones (by Phase/Milestone_Name) are 'In Progress'
+      or 'Pending' and map them against the bug volumes per project.
+    - Highlight any project where high-severity bugs coincide with low Progress %.
+  If both datasets are the same type, compare their key KPIs directly.
+
+PARAGRAPH 3 — Team workload & bottleneck analysis:
+  If shared assignees (Owner/Assignee) exist across datasets, evaluate
+  combined task + bug load per individual. Call out over-capacity members.
+  Identify which milestone phase or bug priority bucket is the biggest bottleneck.
+
+PARAGRAPH 4 — Suggested follow-up queries:
+  2–3 natural follow-up questions as a <ul> list, e.g.:
+  <ul>
+    <li>Which project has the most Blocker bugs still open?</li>
+    <li>Who is the top performer by resolution rate across both datasets?</li>
+    <li>Which milestone phase has the lowest completion rate?</li>
+  </ul>
+
+─── KPI rules ───────────────────────────────────────────────────────────────
+{kpi_display_instructions}
+- Prefix KPI name with dataset name: "Bug Tracker: Critical Count"
+- Values from results only — no recalculation.
+- Skip datasets where result has an error or null value.
+
+─── Chart rules ─────────────────────────────────────────────────────────────
+- Always include at least 1 chart. No duplicate chart titles.
+- If both datasets exist: prefer a side-by-side bar comparing the same
+  metric (e.g., total tasks vs total bugs) across project names.
+- Single dataset: use breakdown array or status distribution as chart data.
+- line → time-series | pie → ≤5 proportional | bar → everything else.
+
+─── AI Insights rules ───────────────────────────────────────────────────────
+All four fields REQUIRED. Every entry must reference a specific number,
+project name, or team member from the data — no generic platitudes.
+"""
+
+
 BUCKET_ORDER: list[str] = ["High", "Medium", "Low", "Critical"]
+
 
 def classify_productivity_status(status: str) -> str:
     """Map a raw status or priority string to one of four canonical productivity buckets."""

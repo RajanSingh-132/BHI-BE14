@@ -236,6 +236,7 @@ async def get_analytics(
         alias="type",
         description="Analytics type: leads | Sales | Productivity | summary",
     ),
+    file_name: Optional[str] = Query(None, description="Optional specific dataset to analyze"),
 ):
     """
     Return analytics for uploaded dataset(s) in current session.
@@ -245,6 +246,10 @@ async def get_analytics(
     session_id = _get_session_id(request)
     session_state = _mongo.get_session_state(session_id)
     active_datasets = session_state.get("active_datasets", []) or []
+
+    if file_name and file_name in active_datasets:
+        active_datasets = [file_name]
+
 
     if not active_datasets:
         raise HTTPException(

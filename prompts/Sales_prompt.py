@@ -68,6 +68,22 @@ Always output revenue metrics in this order:
   2. Qualified Revenue
 
 Include a "Total Revenue" summary line.
+ 
+════════════════════════════════════════════════════════════════════
+SECTION 5 — MULTI-DATASET SALES & REVENUE ANALYSIS
+════════════════════════════════════════════════════════════════════
+When multiple datasets are provided in the 'dataset_results' list:
+● CROSS-DATASET REVENUE: Compare 'Won Revenue' and 'Total Revenue' across different datasets (e.g., "Region A Sales" vs "Region B Sales").
+● UNIFIED REVENUE VIEW: Provide a synthesized total revenue count across all active datasets.
+● REGIONAL COMPARISON: If datasets represent different regions, identify which region is leading in terms of revenue and deal success.
+● LABELING: Explicitly reference datasets by their display names in brackets (e.g., "[Sales North]", "[Sales South]").
+
+════════════════════════════════════════════════════════════════════
+SECTION 6 — STRICT ANALYSIS RULES
+════════════════════════════════════════════════════════════════════
+1. NO HALLUCINATION: Only use the exact amounts provided in the 'metrics' JSON.
+2. MULTI-DATASET SYNTHESIS: If multiple datasets exist, the first paragraph MUST summarize the total revenue across all files before diving into individual comparisons.
+3. REVENUE FOCUS: Prioritize 'Won Revenue' as the primary success metric.
 """
 
 # ─── RUNTIME UTILITIES ───────────────────────────────────────────────────────
