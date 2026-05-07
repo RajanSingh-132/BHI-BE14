@@ -93,7 +93,6 @@ def calculate_productivity_metrics(dataset_entries: List[Dict[str, Any]]) -> Dic
                         if owner_val.lower() != str(proj_name).lower():
                             recent_milestones.append({
                                 "project": str(proj_name),
-                                "owner": owner_val,
                                 "date": deadline_str, # This is the Absolute Max Date
                                 "milestone": str(row[milestone_col]) if milestone_col and pd.notna(row[milestone_col]) else "General",
                                 "status": str(row[status_col]) if status_col and pd.notna(row[status_col]) else "Unknown"
@@ -253,9 +252,6 @@ def calculate_productivity_metrics(dataset_entries: List[Dict[str, Any]]) -> Dic
             "status": status_col if status_col else "Status",
             "priority": priority_col if priority_col else "Priority",
             "project": project_col if project_col else "Project",
-            "milestone": milestone_col if milestone_col else "Milestone",
-            "owner": assignee_col if assignee_col else "Owner",
-            "date": end_date_col if end_date_col else "Date"
         },
         "byStatus": [{"status": b, "count": int(counts.get(b, 0))} for b in BUCKET_ORDER],
         "recentMilestones": recent_milestones

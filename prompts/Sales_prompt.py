@@ -20,7 +20,7 @@ SECTION 1 — COLUMN IDENTIFICATION
 Before any calculation, scan the dataset headers and locate the following column roles.
 Match is case-insensitive.
 
-  REVENUE / AMOUNT → revenue, sales, amount, deal_value, revenue_actual, income, deal_amount, forecast_amount
+  REVENUE / AMOUNT → revenue, sales, amount, deal_value, revenue_actual, income, deal_amount, forecast_amount, revenue_expected
   
   STATUS / STAGE  → status, stage, deal_status, pipeline_stage, state, phase, deal_stage
   
@@ -60,6 +60,16 @@ Map raw status values into these three buckets based on meaning:
   CONTACTED : Early stage or default status (e.g., New, Contacted, In Progress, Open).
 
 ════════════════════════════════════════════════════════════════════
+SECTION 10 — GUARDRAILS (CRITICAL)
+════════════════════════════════════════════════════════════════════
+
+  1. SCOPE: Answer questions related to uploaded datasets with detailed business insights.
+     If the question is unrelated to the datasets or business intelligence, respond briefly in 1-3 sentences only.
+     Do NOT generate long explanations for off-topic questions.
+     Do NOT over-explain limitations.
+     Politely state that the question is outside the dataset scope.
+
+════════════════════════════════════════════════════════════════════
 SECTION 4 — OUTPUT FORMAT
 ════════════════════════════════════════════════════════════════════
 
@@ -84,6 +94,7 @@ SECTION 6 — STRICT ANALYSIS RULES
 1. NO HALLUCINATION: Only use the exact amounts provided in the 'metrics' JSON.
 2. MULTI-DATASET SYNTHESIS: If multiple datasets exist, the first paragraph MUST summarize the total revenue across all files before diving into individual comparisons.
 3. REVENUE FOCUS: Prioritize 'Won Revenue' as the primary success metric.
+4. REVENUE PRIORITY: If both "deal_amount" and "revenue_expected" are present, you MUST prioritize "revenue_expected" (Expected Revenue) as the primary indicator of revenue and business value.
 """
 
 # ─── RUNTIME UTILITIES ───────────────────────────────────────────────────────

@@ -419,11 +419,12 @@ def _extract_intent(query: str, schema_profile: Dict, dataset_count: int = 1) ->
 # ---------------------------------------------------------------------------
 # Stage 3 — Analysis (receives all N computed results)
 # ---------------------------------------------------------------------------
-
 def _analyze_results_multi(
-    query:           str,
-    dataset_results: List[Dict],   # [{dataset_name, display_name, calc_result}, ...]
-    history:         Any,
+    query:             str,
+    dataset_results:   List[Dict],   # [{dataset_name, display_name, calc_result}, ...]
+    history:           Any,
+    context:           Optional[str] = None,
+    dashboard_summary: Optional[Dict] = None,
 ) -> Dict:
     """
     LLM call #2 for multi-dataset path.
@@ -432,6 +433,10 @@ def _analyze_results_multi(
     """
     history_text    = _format_history(history)
     history_section = f"\nConversation History:\n{history_text}\n" if history_text else ""
+
+    dashboard_context = ""
+    if dashboard_summary:
+        dashboard_context = f"\nCurrent Dashboard State:\n{json.dumps(dashboard_summary, indent=2, default=str)}\n"
 
     labeled = [
         {
@@ -445,41 +450,51 @@ def _analyze_results_multi(
     dataset_names  = ", ".join(dr["display_name"] for dr in dataset_results)
     results_json   = json.dumps(labeled, indent=2, default=str)
 
-    # Use the first dataset's type to drive KPI card selection and prompt routing
-    first_type = dataset_results[0].get("dataset_type", "") if dataset_results else ""
-    all_types  = [dr.get("dataset_type", "") for dr in dataset_results]
+    # ── Context resolution ──────────────────────────────────────────────────
+    # Prioritise the context passed from the frontend (current page route)
+    # over the type of the first dataset in the list.
+    ctx_lower = (context or "").lower()
+    if "leads" in ctx_lower:
+        active_type = "leads"
+    elif "sales" in ctx_lower:
+        active_type = "Sales"
+    elif "productivity" in ctx_lower:
+        active_type = "Productivity"
+    else:
+        # Fallback: Use the first dataset's type
+        active_type = dataset_results[0].get("dataset_type", "") if dataset_results else ""
+
+    all_types = [dr.get("dataset_type", "") for dr in dataset_results]
 
     domain_knowledge = ""
-    if first_type == "leads":
+    if active_type == "leads":
         domain_knowledge = LEADS_MULTI_PROMPT
-    elif first_type == "Sales":
+    elif active_type == "Sales":
         domain_knowledge = SALES_SYSTEM_PROMPT
-    elif first_type == "Productivity":
+    elif active_type == "Productivity":
         domain_knowledge = PRODUCTIVITY_SYSTEM_PROMPT
 
     # ── Dynamic prompt routing ────────────────────────────────────────────────
-    # Use the specialized Productivity multi-dataset prompt when ALL active
-    # datasets are Productivity-type (Milestone or Bug tracker). This mirrors
-    # how MULTI_DATASET_ANALYSIS_PROMPT is used for Leads/Sales but is tailored
-    # for Milestone-Bug correlation and team workload analysis.
-    all_productivity = all(t == "Productivity" for t in all_types if t)
+    # Use the specialized Productivity multi-dataset prompt when context is 
+    # Productivity or ALL active datasets are Productivity-type.
+    all_productivity = all(t == "Productivity" for t in all_types if t) or active_type == "Productivity"
 
     if all_productivity:
         prompt = PRODUCTIVITY_MULTI_DATASET_PROMPT.format(
             dataset_names            = dataset_names,
             query                    = query,
             dataset_results_json     = results_json,
-            kpi_display_instructions = get_fields_for_prompt(query, first_type),
-        ) + history_section
+            kpi_display_instructions = get_fields_for_prompt(query, active_type),
+        ) + history_section + dashboard_context
         logger.info("[ANALYSIS] Using PRODUCTIVITY_MULTI_DATASET_PROMPT")
     else:
         prompt = MULTI_DATASET_ANALYSIS_PROMPT.format(
             dataset_names            = dataset_names,
             query                    = query,
             dataset_results_json     = results_json,
-            kpi_display_instructions = get_fields_for_prompt(query, first_type),
+            kpi_display_instructions = get_fields_for_prompt(query, active_type),
             domain_knowledge         = domain_knowledge,
-        ) + history_section
+        ) + history_section + dashboard_context
 
     raw = _gemini_generate(
         prompt,
@@ -513,34 +528,49 @@ def _analyze_results_multi(
 
 
 def _analyze_results(
-    query:          str,
-    calc_result:    Dict,
-    schema_profile: Dict,
-    history:        Any,
+    query:             str,
+    calc_result:       Dict,
+    schema_profile:    Dict,
+    history:           Any,
+    context:           Optional[str] = None,
+    dashboard_summary: Optional[Dict] = None,
 ) -> Dict:
     """LLM call #2 for single-dataset path (backward compat)."""
     history_text    = _format_history(history)
     history_section = f"\nConversation History:\n{history_text}\n" if history_text else ""
 
-    dataset_type = schema_profile.get("dataset_type", "generic")
+    dashboard_context = ""
+    if dashboard_summary:
+        dashboard_context = f"\nCurrent Dashboard State:\n{json.dumps(dashboard_summary, indent=2, default=str)}\n"
+
+    # ── Context resolution ──────────────────────────────────────────────────
+    ctx_lower = (context or "").lower()
+    if "leads" in ctx_lower:
+        active_type = "leads"
+    elif "sales" in ctx_lower:
+        active_type = "Sales"
+    elif "productivity" in ctx_lower:
+        active_type = "Productivity"
+    else:
+        active_type = schema_profile.get("dataset_type", "generic")
     
     domain_knowledge = ""
-    if dataset_type == "leads":
+    if active_type == "leads":
         domain_knowledge = LEADS_SYSTEM_PROMPT
-    elif dataset_type == "Sales":
+    elif active_type == "Sales":
         domain_knowledge = SALES_SYSTEM_PROMPT
-    elif dataset_type == "Productivity":
+    elif active_type == "Productivity":
         domain_knowledge = PRODUCTIVITY_SYSTEM_PROMPT
 
     prompt = ANALYSIS_PROMPT.format(
-        dataset_type             = dataset_type,
+        dataset_type             = active_type,
         row_count                = calc_result.get("row_count", "unknown"),
         filter_applied           = calc_result.get("filter_applied", "none"),
         computed_results_json    = json.dumps(calc_result, indent=2, default=str),
         query                    = query,
-        kpi_display_instructions = get_fields_for_prompt(query, dataset_type),
+        kpi_display_instructions = get_fields_for_prompt(query, active_type),
         domain_knowledge         = domain_knowledge,
-    ) + history_section
+    ) + history_section + dashboard_context
 
     raw = _gemini_generate(prompt, label="ANALYSIS")
     if not raw:
@@ -812,10 +842,12 @@ def _rag_fallback(message: str, history: Any) -> Dict:
 # ---------------------------------------------------------------------------
 
 def generate_ai_response(
-    session_id: str,
-    message:    str,
-    history:    Any  = None,
-    request:    Any  = None,   # kept for signature compatibility; not used for state
+    session_id:        str,
+    message:           str,
+    history:           Any = None,
+    request:           Any = None,
+    context:           Optional[str] = None,
+    dashboard_summary: Optional[Dict] = None,
 ) -> Dict:
     """
     Orchestrates the full multi-dataset query pipeline.
@@ -978,9 +1010,17 @@ def generate_ai_response(
             dataset_results[0]["calc_result"],
             with_schema[0]["schema"],
             history,
+            context=context,
+            dashboard_summary=dashboard_summary,
         )
     else:
-        result = _analyze_results_multi(message, dataset_results, history)
+        result = _analyze_results_multi(
+            message, 
+            dataset_results, 
+            history, 
+            context=context,
+            dashboard_summary=dashboard_summary,
+        )
 
     # ── Cache the result ──────────────────────────────────────────────────────
     if result.get("answer"):

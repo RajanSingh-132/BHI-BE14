@@ -52,6 +52,16 @@ class ChatRequest(BaseModel):
         description="Full conversation history"
     )
 
+    context: Optional[str] = Field(
+        default=None,
+        description="Current page context (e.g., leads, sales)"
+    )
+
+    dashboard_summary: Optional[Any] = Field(
+        default=None,
+        description="Current dashboard metrics and state"
+    )
+
     @validator("chat_history")
     def validate_history(cls, v):
 

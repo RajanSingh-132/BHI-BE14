@@ -153,7 +153,6 @@ class MongoDBClient:
                 "query":       query,
                 "answer":      result_data["answer"],
                 "kpis":        result_data.get("kpis", []),
-                "charts":      result_data.get("charts", []),
                 "timestamp":   __import__("datetime").datetime.utcnow(),
             }
 

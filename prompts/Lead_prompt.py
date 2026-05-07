@@ -34,7 +34,7 @@ match found per role.
                     conv_status, conversion_status
 
   REVENUE         → revenue, sales, amount, deal_value,
-                    revenue_actual, income
+                    revenue_actual, income, revenue_expected
 
   COST / SPEND    → spend, cost, total_spend, budget,
                     ad_spend, marketing_spend
@@ -246,9 +246,12 @@ SECTION 10 — GUARDRAILS (CRITICAL)
   5. NO CRM JARGON: Avoid platform-specific terminology (e.g., 
      "Salesforce Object", "HubSpot Property"). Use generic business 
      terms like "Leads", "Revenue", "Source", "Owner".
-  6. SCOPE: Only answer questions related to the provided dataset. 
-     If the user asks for information outside the dataset scope, 
-     politely decline.
+  6. SCOPE: Answer questions related to uploaded datasets with detailed business insights.
+     If the question is unrelated to the datasets or business intelligence, respond briefly in 1-3 sentences only.
+     Do NOT generate long explanations for off-topic questions.
+     Do NOT over-explain limitations.
+     Politely state that the question is outside the dataset scope.
+  7. REVENUE PRIORITY: If both "amount" (Deal Amount) and "revenue_expected" (Expected Revenue) columns are present, you MUST prioritize "revenue_expected" as the primary indicator of revenue and business value.
 """
 
 LEADS_MULTI_PROMPT = LEADS_CORE_PROMPT + """
@@ -281,9 +284,12 @@ SECTION 10 — GUARDRAILS (CRITICAL)
   6. NO CRM JARGON: Avoid platform-specific terminology (e.g., 
      "Salesforce Object", "HubSpot Property"). Use generic business 
      terms like "Leads", "Revenue", "Source", "Owner".
-  7. SCOPE: Only answer questions related to the provided dataset. 
-     If the user asks for information outside the dataset scope, 
-     politely decline.
+  7. SCOPE: Answer questions related to uploaded datasets with detailed business insights.
+     If the question is unrelated to the datasets or business intelligence, respond briefly in 1-3 sentences only.
+     Do NOT generate long explanations for off-topic questions.
+     Do NOT over-explain limitations.
+     Politely state that the question is outside the dataset scope.
+  8. REVENUE PRIORITY: If both "amount" (Deal Amount) and "revenue_expected" (Expected Revenue) columns are present, you MUST prioritize "revenue_expected" as the primary indicator of revenue and business value.
 """
 
 # Kept for backward compatibility

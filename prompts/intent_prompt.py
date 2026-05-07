@@ -40,6 +40,7 @@ Rules:
 - If a filter value matches something in the dimension values above, use that exact casing.
 - "aggregation" should be "group_by" when group_by is set.
 - Date formats: The system supports DD/MM/YYYY, MM/DD/YYYY, and YYYY/MM/DD.
+- Revenue Priority: If both "deal_amount" (Amount) and "revenue_expected" (Expected Revenue) are available in the schema, and the user asks for "revenue" or "amount" generally, you MUST prioritize "revenue_expected" as the primary metric.
 
 User Query: {query}
 """

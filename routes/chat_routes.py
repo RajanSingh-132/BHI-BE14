@@ -36,40 +36,101 @@ def _get_session_id(request: Request) -> str:
     return sid
 
 
-@router.post("/chat")
-async def chat(req: ChatRequest, request: Request):
+@router.post("/leads-chat")
+async def leads_chat(req: ChatRequest, request: Request):
     try:
         tracker.api_hit()
-
         if not req.chat_history:
             raise HTTPException(status_code=400, detail="Chat history empty")
-
         user_message = req.chat_history[-1].content.strip()
         session_id   = _get_session_id(request)
-
-        # Pass all messages except the current one as conversation context.
+        # Force context to leads
+        context      = "leads"
         conversation_history = req.chat_history[:-1]
-
-        # File upload acknowledgement — client sends this magic string after
-        # a successful upload so the UI shows a confirmation message.
-        if "file uploaded" in user_message.lower():
-            return {
-                "answer": "File uploaded successfully ✅\n\n👉 Now ask your question from the dataset.",
-                "kpis":   [],
-                "charts": [],
-            }
-
         result = generate_ai_response(
             session_id=session_id,
             message=user_message,
             history=conversation_history,
             request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary
         )
-
         return result
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"[CHAT] Error: {e}", exc_info=True)
+        logger.error(f"[LEADS-CHAT] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat service unavailable")
+
+
+@router.post("/sales-chat")
+async def sales_chat(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        # Force context to Sales
+        context      = "Sales"
+        conversation_history = req.chat_history[:-1]
+        result = generate_ai_response(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[SALES-CHAT] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat service unavailable")
+
+
+@router.post("/productivity-chat")
+async def productivity_chat(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        # Force context to Productivity
+        context      = "Productivity"
+        conversation_history = req.chat_history[:-1]
+        result = generate_ai_response(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[PROD-CHAT] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat service unavailable")
+
+
+@router.post("/summary-chat")
+async def summary_chat(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        # Force context to Summary
+        context      = "Summary"
+        conversation_history = req.chat_history[:-1]
+        result = generate_ai_response(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[SUMMARY-CHAT] Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Chat service unavailable")
