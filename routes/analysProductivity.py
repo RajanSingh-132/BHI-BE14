@@ -103,8 +103,8 @@ def calculate_productivity_metrics(dataset_entries: List[Dict[str, Any]]) -> Dic
     if assignee_col:
         resolved_keywords = ["resolved", "closed", "done", "success", "finish", "completed", "close"]
         if status_col:
-            df['is_resolved'] = df[status_col].astype(str).str.lower().apply(
-                lambda x: any(kw in x for kw in resolved_keywords)
+            df['is_resolved'] = df[status_col].apply(
+                lambda x: any(kw in x for kw in resolved_keywords) if isinstance(x, str) else False
             )
         else:
             df['is_resolved'] = False

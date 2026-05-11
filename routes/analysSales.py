@@ -114,6 +114,13 @@ def calculate_revenue_metrics(datasets: List[Dict[str, Any]]) -> Dict[str, Any]:
                 closed_deals += len(df)
 
         if region_col:
+            if primary_rev_col is None:
+                return {
+                    "totalRevenue": 0, "avgDealSize": 0, "closedDeals": 0, "growthRate": 0, "roi": 0,
+                    "byRegion": [], "monthlyRevenue": [], "bestRevenue": None, "worstRevenue": None,
+                    "bestWonRegion": None, "worstWonRegion": None, "pipelineValue": 0, "wonRevenue": 0,
+                    "qualifiedRevenue": 0
+                }
             temp_reg = df.copy()
             temp_reg["_rev"] = _to_numeric(temp_reg[primary_rev_col]).fillna(0)
             temp_reg["_status"] = temp_reg[status_col].astype(str).apply(classify_sales_status) if status_col else "Contacted"
