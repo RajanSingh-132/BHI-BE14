@@ -955,6 +955,34 @@ def generate_ai_response(
         stats.summary()
         return result
 
+    # ── Stage 0: Fast-path for general/conversational queries ────────────────
+    # If the query is just "explain the dashboard" or a greeting, skip Intent & Calc.
+    conversational_keywords = [
+        "explain the dashboard", "how to use", "what is this dashboard",
+        "tell me about this", "dashboard help", "dashboard guide",
+        "explain this data", "help me understand"
+    ]
+    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "how are you", "what's up", "hii", "helo"]
+    query_lower = message.lower().strip().rstrip("?")
+    
+    is_general = any(kw in query_lower for kw in conversational_keywords) or query_lower in greetings
+
+    if is_general:
+        logger.info(f"[AI_SERVICES] Fast-path: General query detected: '{message}'")
+        primary_dp = with_schema[0] if with_schema else (without_schema[0] if without_schema else None)
+        if primary_dp:
+            dummy_calc = {
+                "metric": "general", "result": None, "record_rows": [], 
+                "row_count": len(primary_dp.get("data", [])),
+                "filter_applied": "none", "error": None
+            }
+            result = _analyze_results(
+                message, dummy_calc, primary_dp.get("schema", {}), 
+                history, context=context, dashboard_summary=dashboard_summary
+            )
+            stats.summary()
+            return result
+
     # ── Stage 1: Extract intent from merged schema (single LLM call) ──────────
     merged_schema = _merge_schemas(all_schemas)
     query_intent  = _extract_intent(message, merged_schema, dataset_count=len(with_schema))

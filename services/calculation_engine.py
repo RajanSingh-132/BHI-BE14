@@ -83,10 +83,81 @@ def calculate(
                 f"No data matches the applied filters: {filter_desc or 'unknown'}"
             )
 
+        # 1b. If filters narrowed to a small set of rows (row-level lookup like
+        #     "give me details of MS-102"), capture the raw rows now so the LLM
+        #     can display the full record — even if metric resolution later fails.
+        record_rows: List[Dict] = []
+        if filters and filter_desc != "none" and len(df) <= 5:
+            record_rows = df.to_dict(orient="records")
+
+        # 1c. Short-circuit for record_lookup (Identifier queries)
+        if metric == "record_lookup":
+            if record_rows:
+                return {
+                    "metric":         "record_lookup",
+                    "result":         None,
+                    "record_details": {},
+                    "record_rows":    record_rows,
+                    "breakdown":      [],
+                    "lead_breakdown": {},
+                    "group_by_col":   None,
+                    "metric_col":     None,
+                    "formula":        "Row lookup by identifier",
+                    "source":         "calculated",
+                    "unit":           None,
+                    "filter_applied": filter_desc,
+                    "row_count":      len(df),
+                    "warnings":       [],
+                    "error":          None,
+                }
+            else:
+                return _error_result("Requested record not found in the dataset.")
+
+        # 1d. Short-circuit if no specific metric was requested but filters narrowed it down
+        #     (e.g., "who is Neha?" -> filters=[owner=Neha], metric="none")
+        if metric in ("none", "") and filter_desc != "none" and len(df) <= 5:
+            return {
+                "metric":         "record_lookup",
+                "result":         None,
+                "record_details": {},
+                "record_rows":    record_rows or df.to_dict(orient="records"),
+                "breakdown":      [],
+                "lead_breakdown": {},
+                "group_by_col":   None,
+                "metric_col":     None,
+                "formula":        "Row lookup by filter",
+                "source":         "calculated",
+                "unit":           None,
+                "filter_applied": filter_desc,
+                "row_count":      len(df),
+                "warnings":       [],
+                "error":          None,
+            }
+
         # 2. Resolve the column(s) for the requested metric
         col_res = resolve_column(metric, schema_profile, return_all_lead_types=return_all_leads)
 
         if col_res["missing"]:
+            # Even if the metric can't be resolved, return the raw row data
+            # so the LLM can still answer "details of MS-102" queries.
+            if record_rows:
+                return {
+                    "metric":         "record_lookup",
+                    "result":         None,
+                    "record_details": {},
+                    "record_rows":    record_rows,
+                    "breakdown":      [],
+                    "lead_breakdown": {},
+                    "group_by_col":   None,
+                    "metric_col":     None,
+                    "formula":        "Row lookup by identifier",
+                    "source":         "calculated",
+                    "unit":           None,
+                    "filter_applied": filter_desc,
+                    "row_count":      len(df),
+                    "warnings":       [],
+                    "error":          None,
+                }
             return _error_result(col_res.get("warning") or f"Cannot resolve metric: '{metric}'")
 
         # 3. Route to the correct calculation path
@@ -96,7 +167,7 @@ def calculate(
         if col_res["derivable"]:
             return _calc_derived(df, col_res, metric, aggregation, filter_desc, schema_profile, group_by)
 
-        return _calc_direct(df, col_res, metric, aggregation, filter_desc, schema_profile, group_by)
+        return _calc_direct(df, col_res, metric, aggregation, filter_desc, schema_profile, group_by, record_rows=record_rows)
 
     except Exception as e:
         logger.error("[CALC_ENGINE] Unexpected error", exc_info=True)
@@ -106,6 +177,22 @@ def calculate(
 # ---------------------------------------------------------------------------
 # Filter application
 # ---------------------------------------------------------------------------
+
+def _norm_id(s: str) -> str:
+    """
+    Normalize an identifier string for fuzzy matching.
+    Collapses spaces, hyphens, and underscores into a single space,
+    then lowercases and strips.
+
+    Examples:
+      "MS-052"  → "ms 052"
+      "MS_052"  → "ms 052"
+      "MS 052"  → "ms 052"
+      "ms052"   → "ms052"   (no separator → unchanged)
+    """
+    import re
+    return re.sub(r"[-_\s]+", " ", s.strip()).lower()
+
 
 def _apply_filters(
     df: pd.DataFrame,
@@ -120,22 +207,45 @@ def _apply_filters(
         if not field_type or not value:
             continue
 
-        # Try dimension_map first (fast path)
+        col_name    = None
+        norm_value  = _norm_id(value)   # normalized search term
+
+        # 1. Try dimension_map first (fast path via schema)
         col_name = get_dimension_col(field_type, schema_profile)
 
-        # Fallback: scan all dimension_values for the value itself
+        # 2. Fallback: scan dimension_values for the exact value
         if not col_name:
             result = find_value_dimension(value, schema_profile)
             if result:
                 col_name, value = result
 
+        # 3. Last resort: brute-force scan every column in the dataframe.
+        #    Uses separator-normalized matching so "MS 052" matches "MS-052".
+        #    Handles identifier/milestone columns excluded from dimension_map.
+        if not col_name:
+            for c in df.columns:
+                col_normed = df[c].astype(str).str.strip().apply(_norm_id)
+                if col_normed.eq(norm_value).any():
+                    col_name = c
+                    logger.info(
+                        f"[CALC_ENGINE] Brute-force filter matched: "
+                        f"column='{c}', query='{value}' (normalized='{norm_value}')"
+                    )
+                    break
+
         if col_name and col_name in df.columns:
-            mask = df[col_name].astype(str).str.strip().str.lower() == value.lower()
+            # Apply mask using normalized comparison so separator variants match
+            col_normed = df[col_name].astype(str).str.strip().apply(_norm_id)
+            mask = col_normed == norm_value
+            if not mask.any():
+                # Exact normalized match failed; fall back to plain lower() match
+                mask = df[col_name].astype(str).str.strip().str.lower() == value.lower()
             df = df[mask].copy()
             desc_parts.append(f"{col_name} = '{value}'")
         else:
             logger.warning(
-                f"[CALC_ENGINE] Filter ignored — no column for field_type='{field_type}', value='{value}'"
+                f"[CALC_ENGINE] Filter ignored — no column for "
+                f"field_type='{field_type}', value='{value}'"
             )
 
     return df, ", ".join(desc_parts) if desc_parts else "none"
@@ -243,6 +353,7 @@ def _calc_direct(
     filter_desc:  str,
     schema:       Dict,
     group_by:     Optional[str],
+    record_rows:  Optional[List[Dict]] = None,
 ) -> Dict:
     col_name     = col_res["primary_col"]
     is_summable  = col_res["is_summable"]
@@ -319,6 +430,7 @@ def _calc_direct(
         "metric":         metric,
         "result":         round(result, 2),
         "record_details": record_details,
+        "record_rows":    record_rows or [],
         "breakdown":      [],
         "lead_breakdown": {},
         "group_by_col":   None,
@@ -563,6 +675,7 @@ def _error_result(msg: str) -> Dict:
         "metric":         "error",
         "result":         None,
         "record_details": {},
+        "record_rows":    [],
         "breakdown":      [],
         "lead_breakdown": {},
         "group_by_col":   None,

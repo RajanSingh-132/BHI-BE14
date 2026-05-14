@@ -31,8 +31,9 @@ Output this JSON exactly:
 }}
 
 Rules:
-- "metric" must be one from: {available_metrics}
-  If the query asks for something not in that list, pick the closest match.
+- "metric" must be one from: {available_metrics}. 
+  * If the user is asking about a specific record/ID, set "metric" to "record_lookup".
+  * If no metric from the list applies, set "metric" to null (NEVER use the string "none").
 - "filters" should be empty [] if no filter is needed.
 - If the query asks "by channel", "per campaign", "breakdown by X" → set group_by.
 - If the query says "leads" without qualifying (not "qualified leads", "converted leads") → set return_all_lead_types: true.
@@ -40,7 +41,13 @@ Rules:
 - If a filter value matches something in the dimension values above, use that exact casing.
 - "aggregation" should be "group_by" when group_by is set.
 - Date formats: The system supports DD/MM/YYYY, MM/DD/YYYY, and YYYY/MM/DD.
-- Revenue Priority: If both "deal_amount" (Amount) and "revenue_expected" (Expected Revenue) are available in the schema, and the user asks for "revenue" or "amount" generally, you MUST prioritize "revenue_expected" as the primary metric.
+- Revenue Priority: When the query asks for "revenue", "amount", or "forecast", you MUST prioritize selecting the metric in this exact order of availability: 1. forecast_amount, 2. revenue, 3. expected_revenue, 4. deal_amount.
+- IDENTIFIER LOOKUP (CRITICAL): If the user's query contains an alphanumeric code that looks like a record identifier (e.g. "MS-014", "MS 014", "MS014", "PROJ-5", "OPP-123", "SUG-OPP-1", "BUG-42", or any pattern of letters followed by digits with optional separators), treat this as a record detail request. In this case:
+  * Set "metric" to "record_lookup"
+  * Set "aggregation" to "count"
+  * Set "filters" to [{{"field": "identifier", "value": "<the exact identifier string as the user typed it>"}}]
+  * Set "group_by" to null
+  This applies even when the query is phrased like "give me details of X", "what is X", "show X", "X details", or just "X".
 
 User Query: {query}
 """

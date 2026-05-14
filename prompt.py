@@ -75,7 +75,7 @@ SMART COLUMN MAPPING (VERY IMPORTANT)
 
 Map dynamically:
 
-Revenue = revenue OR Revenue_Actual OR sales OR deal_value OR metadata.revenue
+Revenue = forecast_amount OR revenue OR expected_revenue OR deal_amount OR deal_value OR Revenue_Actual OR sales OR metadata.revenue
 Sessions = sessions OR traffic OR metadata.sessions
 Users = users OR customers OR metadata.users
 Conversions = conversions OR sales_count OR "Closed Won" OR metadata.conversions
@@ -286,6 +286,7 @@ DO NOT:
 ✘ Mention data source or system
 ✘ Mention missing columns
 ✘ Use generic phrases
+✘ Use abbreviated words like "Billion", "Million", "B", or "M" (always use full actual numbers)
 
 --------------------------------------------------
 

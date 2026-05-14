@@ -28,9 +28,9 @@ def calculate_revenue_metrics(datasets: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         revenue_col = _schema_role_col(schema, "revenue_actual") or _find_col(
             df, [
-                "revenue", "actual_revenue", "total_revenue", "sales",
-                "income", "amount", "deal_value", "revenue_actual",
-                "forecast_amount", "forecast amount (inr)"
+                "forecast_amount", "forecast amount (inr)", "revenue", 
+                "actual_revenue", "total_revenue", "sales", "income", 
+                "amount", "deal_value", "revenue_actual"
             ],
         )
         expected_col = _schema_role_col(schema, "revenue_expected") or _find_col(

@@ -94,7 +94,9 @@ SECTION 7 — STRICT ANALYSIS RULES
 1. NO HALLUCINATION: Only use the exact amounts provided in the 'metrics' JSON.
 2. MULTI-DATASET SYNTHESIS: If multiple datasets exist, the first paragraph MUST summarize the total revenue across all files before diving into individual comparisons.
 3. REVENUE FOCUS: Prioritize 'Won Revenue' as the primary success metric.
-4. REVENUE PRIORITY: If both "deal_amount" and "revenue_expected" are present, you MUST prioritize "revenue_expected" (Expected Revenue) as the primary indicator of revenue and business value.
+4. REVENUE PRIORITY: When analyzing revenue or amount, prioritize columns in this exact order: 1. forecast_amount, 2. revenue, 3. expected_revenue, 4. deal_amount. Only move to the next in the list if the previous one is unavailable. Always prioritize Forecast Amount as the primary indicator of value.
+5. NUMBER FORMATTING: Do NOT use words like "Billion", "Million", "Crore", "Lakh", "B", "M", "Cr", or "L" in your response. Always provide the actual, full numeric results (e.g., 3,460,000,000 instead of 3.46 Billion, or 50,610,000 instead of 5.06 Crore).
+6. ADAPTIVE FOCUS: Adapt your focus based on the query. If the user asks for a dashboard or summary, provide concise, dashboard-level business insights focusing on trends, risks, and opportunities. If the user asks about a specific entity, row, or person by name, identify that specific record and provide its detailed metrics and insights from the dataset.
 """
 
 # ─── RUNTIME UTILITIES ───────────────────────────────────────────────────────

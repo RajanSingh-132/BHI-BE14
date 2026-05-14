@@ -250,7 +250,7 @@ def classify_productivity_status(status: str) -> str:
         return "Critical"
     
     # 2. HIGH
-    if any(kw in s for kw in ("resolved", "closed", "done", "high", "success", "finish")): 
+    if any(kw in s for kw in ("resolved", "closed", "done", "high", "success", "finish", "completed")): 
         return "High"
     
     # 3. MEDIUM

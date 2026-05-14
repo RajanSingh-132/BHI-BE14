@@ -104,7 +104,7 @@ def calculate_productivity_metrics(dataset_entries: List[Dict[str, Any]]) -> Dic
         resolved_keywords = ["resolved", "closed", "done", "success", "finish", "completed", "close"]
         if status_col:
             df['is_resolved'] = df[status_col].apply(
-                lambda x: any(kw in x for kw in resolved_keywords) if isinstance(x, str) else False
+                lambda x: any(kw in str(x).lower() for kw in resolved_keywords) if pd.notna(x) else False
             )
         else:
             df['is_resolved'] = False
@@ -207,22 +207,22 @@ def calculate_productivity_metrics(dataset_entries: List[Dict[str, Any]]) -> Dic
 
     # --- 6. Dynamic KPI Cards ---
     kpi_cards = [
-        {"label": "Total", "value": total_tasks, "color": "text-slate-900"}
+        {"label": "Total", "value": total_tasks, "color": "text-[var(--text-primary)]"}
     ]
 
     # If priority column exists, use Priority buckets
     if priority_col:
         kpi_cards.extend([
-            {"label": "Critical", "value": int(critical_count), "color": "text-rose-600"},
-            {"label": "High", "value": int(high_count), "color": "text-blue-600"},
-            {"label": "Medium", "value": int(medium_count), "color": "text-amber-600"},
-            {"label": "Low", "value": int(low_count), "color": "text-slate-500"}
+            {"label": "Critical", "value": int(critical_count), "color": "text-[var(--danger)]"},
+            {"label": "High", "value": int(high_count), "color": "text-[var(--info)]"},
+            {"label": "Medium", "value": int(medium_count), "color": "text-[var(--warning)]"},
+            {"label": "Low", "value": int(low_count), "color": "text-[var(--text-muted)]"}
         ])
     # Fallback: If no priority, use the Top Statuses as KPIs
     else:
         # Sort status distribution by count to get the most significant ones
         sorted_statuses = sorted(status_distribution, key=lambda x: x['count'], reverse=True)
-        colors = ["text-rose-600", "text-blue-600", "text-amber-600", "text-slate-500"]
+        colors = ["text-[var(--danger)]", "text-[var(--info)]", "text-[var(--warning)]", "text-[var(--text-muted)]"]
         for i, s in enumerate(sorted_statuses[:4]):
             kpi_cards.append({
                 "label": str(s['status']).upper(),

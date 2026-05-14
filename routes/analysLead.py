@@ -65,9 +65,9 @@ def calculate_lead_metrics(dataset_entries: List[Dict[str, Any]]) -> Dict[str, A
         )
         rev_col = _schema_role_col(schema, "revenue_actual") or _find_col(
             df, [
-                "revenue", "sales", "amount", "deal_value", "revenue_actual", 
-                "income", "deal_size", "value", "deal size", "deal value", 
-                "deal amount", "forecast_amount", "forecast amount (inr)"
+                "forecast_amount", "forecast amount (inr)", "revenue", "sales", 
+                "amount", "deal_value", "revenue_actual", "income", "deal_size", 
+                "value", "deal size", "deal value", "deal amount"
             ],
         )
         owner_col = _schema_dim_col(schema, "owner") or _find_col(

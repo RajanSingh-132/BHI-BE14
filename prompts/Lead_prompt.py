@@ -251,7 +251,9 @@ SECTION 10 — GUARDRAILS (CRITICAL)
      Do NOT generate long explanations for off-topic questions.
      Do NOT over-explain limitations.
      Politely state that the question is outside the dataset scope.
-  7. REVENUE PRIORITY: If both "amount" (Deal Amount) and "revenue_expected" (Expected Revenue) columns are present, you MUST prioritize "revenue_expected" as the primary indicator of revenue and business value.
+  7. REVENUE PRIORITY: When analyzing revenue or amount, prioritize columns in this exact order: 1. forecast_amount, 2. revenue, 3. expected_revenue, 4. deal_amount. Only move to the next in the list if the previous one is unavailable. Always prioritize Forecast Amount as the primary indicator of value.
+  8. NUMBER FORMATTING: Do NOT use words like "Billion", "Million", "Crore", "Lakh", "B", "M", "Cr", or "L" in your response. Always provide the actual, full numeric results (e.g., 3,460,000,000 instead of 3.46 Billion, or 50,610,000 instead of 5.06 Crore).
+  9. ADAPTIVE FOCUS: Adapt your focus based on the query. If the user asks for a dashboard or summary, provide concise, dashboard-level business insights focusing on trends, risks, and opportunities. If the user asks about a specific entity, row, or person by name, identify that specific record and provide its detailed metrics and insights from the dataset.
 """
 
 LEADS_MULTI_PROMPT = LEADS_CORE_PROMPT + """
@@ -289,7 +291,9 @@ SECTION 10 — GUARDRAILS (CRITICAL)
      Do NOT generate long explanations for off-topic questions.
      Do NOT over-explain limitations.
      Politely state that the question is outside the dataset scope.
-  8. REVENUE PRIORITY: If both "amount" (Deal Amount) and "revenue_expected" (Expected Revenue) columns are present, you MUST prioritize "revenue_expected" as the primary indicator of revenue and business value.
+  8. REVENUE PRIORITY: When analyzing revenue or amount, prioritize columns in this exact order: 1. forecast_amount, 2. revenue, 3. expected_revenue, 4. deal_amount. Only move to the next in the list if the previous one is unavailable. Always prioritize Forecast Amount as the primary indicator of value.
+  9. NUMBER FORMATTING: Do NOT use words like "Billion", "Million", "Crore", "Lakh", "B", "M", "Cr", or "L" in your response. Always provide the actual, full numeric results (e.g., 3,460,000,000 instead of 3.46 Billion, or 50,610,000 instead of 5.06 Crore).
+  10. ADAPTIVE FOCUS: Adapt your focus based on the query. If the user asks for a dashboard or summary, provide concise, dashboard-level business insights focusing on trends, risks, and opportunities. If the user asks about a specific entity, row, or person by name, identify that specific record and provide its detailed metrics and insights from the dataset.
 """
 
 # Kept for backward compatibility
