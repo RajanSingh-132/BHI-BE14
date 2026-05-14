@@ -848,6 +848,7 @@ def generate_ai_response(
     request:           Any = None,
     context:           Optional[str] = None,
     dashboard_summary: Optional[Dict] = None,
+    chat_mode:         bool = False,
 ) -> Dict:
     """
     Orchestrates the full multi-dataset query pipeline.
@@ -901,7 +902,15 @@ def generate_ai_response(
     if cached:
         logger.info(f"[AI_SERVICES] Cache hit — key={dataset_key!r}, query={query!r}")
         stats.summary()
-        return {"answer": cached["answer"], "kpis": cached["kpis"], "charts": cached["charts"]}
+        res = {
+            "answer": cached.get("answer", ""),
+            "kpis":   cached.get("kpis", []),
+            "charts": cached.get("charts", [])
+        }
+        if chat_mode:
+            res["kpis"] = []
+            res["charts"] = []
+        return res
 
     # ── Fetch data and schemas for all datasets ───────────────────────────────
     dataset_payloads: List[Dict] = []
@@ -1063,6 +1072,10 @@ def generate_ai_response(
             })
         except Exception as e:
             logger.error(f"[AI_SERVICES] Cache save failed: {e}")
+
+    if chat_mode:
+        result["kpis"] = []
+        result["charts"] = []
 
     stats.summary()
     return result

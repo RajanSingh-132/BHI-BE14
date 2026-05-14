@@ -53,7 +53,8 @@ async def leads_chat(req: ChatRequest, request: Request):
             history=conversation_history,
             request=request,
             context=context,
-            dashboard_summary=req.dashboard_summary
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True
         )
         return result
     except Exception as e:
@@ -78,7 +79,8 @@ async def sales_chat(req: ChatRequest, request: Request):
             history=conversation_history,
             request=request,
             context=context,
-            dashboard_summary=req.dashboard_summary
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True
         )
         return result
     except Exception as e:
@@ -103,7 +105,8 @@ async def productivity_chat(req: ChatRequest, request: Request):
             history=conversation_history,
             request=request,
             context=context,
-            dashboard_summary=req.dashboard_summary
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True
         )
         return result
     except Exception as e:
@@ -128,7 +131,8 @@ async def summary_chat(req: ChatRequest, request: Request):
             history=conversation_history,
             request=request,
             context=context,
-            dashboard_summary=req.dashboard_summary
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True
         )
         return result
     except Exception as e:

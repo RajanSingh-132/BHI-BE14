@@ -670,7 +670,9 @@ def _calc_multi_leads(
 # ---------------------------------------------------------------------------
 
 def _error_result(msg: str) -> Dict:
-    logger.warning(f"[CALC_ENGINE] {msg}")
+    # Only log warning if it's not an empty metric/none case
+    if not msg.endswith("''") and not msg.endswith("'none'"):
+        logger.warning(f"[CALC_ENGINE] {msg}")
     return {
         "metric":         "error",
         "result":         None,

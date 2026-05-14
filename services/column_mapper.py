@@ -225,7 +225,8 @@ def resolve(
         return _resolve_derivable(canonical, columns)
 
     # ---- Not found ----
-    logger.warning(f"[COLUMN_MAPPER] Cannot resolve metric: '{metric_intent}' (canonical: '{canonical}')")
+    if canonical and canonical.lower() != "none":
+        logger.warning(f"[COLUMN_MAPPER] Cannot resolve metric: '{metric_intent}' (canonical: '{canonical}')")
     return {
         "primary_col":    None,
         "role":           canonical,
