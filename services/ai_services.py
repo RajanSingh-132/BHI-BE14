@@ -36,12 +36,10 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import anthropic as _anthropic_sdk
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types as _genai_types
 
 from mongo_client import mongo_client, _make_dataset_key
 from prompts.analysis_prompt import ANALYSIS_PROMPT, MULTI_DATASET_ANALYSIS_PROMPT
@@ -60,12 +58,7 @@ logger = logging.getLogger(__name__)
 
 # ── Model selection ───────────────────────────────────────────────────────────
 # Set LLM_MODEL in .env or as an env var. No code change needed to switch.
-#
-# Google GenAI (default):
-#   gemini-2.5-flash    — best JSON reliability, 1M context, free tier 5 RPM
-#   gemma-4-31b-it      — open-weight, 128K context, ~25s latency
-#   gemini-2.0-flash    — previous gen
-#
+
 # Anthropic (prefix: claude-):
 #   claude-sonnet-4-5   — balanced quality/speed, recommended
 #   claude-haiku-4-5    — fastest, cheapest
@@ -78,34 +71,20 @@ _LLM_MODEL  = os.getenv("LLM_MODEL", "claude-sonnet-4-5")
 _IS_CLAUDE  = _LLM_MODEL.startswith("claude-")
 
 # ── Client initialisation ─────────────────────────────────────────────────────
-_GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY")
 _ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-if _IS_CLAUDE:
-    if not _ANTHROPIC_API_KEY:
-        raise ValueError("[AI_SERVICES] ANTHROPIC_API_KEY is not set (required for claude-* models)")
-    _anthropic = _anthropic_sdk.Anthropic(api_key=_ANTHROPIC_API_KEY)
-    _gemini    = None
-else:
-    if not _GEMINI_API_KEY:
-        raise ValueError("[AI_SERVICES] GEMINI_API_KEY is not set")
-    _gemini    = genai.Client(api_key=_GEMINI_API_KEY)
-    _anthropic = None
+if not _IS_CLAUDE:
+    raise ValueError("[AI_SERVICES] Only claude-* models are supported in this service")
+if not _ANTHROPIC_API_KEY:
+    raise ValueError("[AI_SERVICES] ANTHROPIC_API_KEY is not set (required for claude-* models)")
+_anthropic = _anthropic_sdk.Anthropic(api_key=_ANTHROPIC_API_KEY)
 
 _retriever = RAGRetriever()
-logger.info(f"[AI_SERVICES] LLM model = {_LLM_MODEL!r} ({'Anthropic' if _IS_CLAUDE else 'Google GenAI'})")
+logger.info(f"[AI_SERVICES] LLM model = {_LLM_MODEL!r} (Anthropic)")
 
 # ── Retry config ──────────────────────────────────────────────────────────────
 _GEMINI_MAX_RETRIES = 2
 _GEMINI_RETRY_BASE  = 4.0   # fallback sleep seconds when retryDelay absent
-
-# Disable AFC globally — Google SDK enables it by default for Gemini 2.5,
-# causing up to 10 silent extra calls per invocation. We don't use tools.
-_GEMINI_CONFIG = _genai_types.GenerateContentConfig(
-    automatic_function_calling=_genai_types.AutomaticFunctionCallingConfig(
-        disable=True
-    )
-)
 
 # Anthropic: max tokens to generate per call.
 # 4096 is enough for our structured JSON responses.
@@ -157,19 +136,6 @@ def _call_anthropic(prompt: str) -> str:
     return msg.content[0].text
 
 
-def _call_google(prompt: str) -> str:
-    """
-    Single Google GenAI call (Gemini or Gemma). No retry logic here.
-    AFC is disabled to prevent hidden tool-call rounds.
-    """
-    response = _gemini.models.generate_content(
-        model=_LLM_MODEL,
-        contents=prompt,
-        config=_GEMINI_CONFIG,
-    )
-    return response.text if hasattr(response, "text") else str(response)
-
-
 def _gemini_generate(
     prompt: str,
     label:  str = "LLM",
@@ -196,7 +162,7 @@ def _gemini_generate(
 
     for attempt in range(1, _GEMINI_MAX_RETRIES + 1):
         try:
-            text = _call_anthropic(prompt) if _IS_CLAUDE else _call_google(prompt)
+            text = _call_anthropic(prompt)
             tracker.gemini_hit()
             stats.complete(rec, success=True, wait_s=total_wait)
             return text
@@ -1121,3 +1087,60 @@ def _deduplicate_charts(charts: List[Dict]) -> List[Dict]:
             )
 
     return unique
+
+
+# ---------------------------------------------------------------------------
+# Streaming wrapper (word-by-word SSE)
+# ---------------------------------------------------------------------------
+
+def generate_ai_response_stream(
+    session_id:        str,
+    message:           str,
+    history:           Any = None,
+    request:           Any = None,
+    context:           Optional[str] = None,
+    dashboard_summary: Optional[Dict] = None,
+    chat_mode:         bool = False,
+) -> Iterator[str]:
+    """
+    Streams the final answer word-by-word using Server-Sent Events (SSE).
+    This keeps existing generate_ai_response() unchanged and reusable.
+    """
+    try:
+        result = generate_ai_response(
+            session_id=session_id,
+            message=message,
+            history=history,
+            request=request,
+            context=context,
+            dashboard_summary=dashboard_summary,
+            chat_mode=chat_mode,
+        )
+
+        answer = str(result.get("answer", "") or "").strip()
+        if not answer:
+            answer = "AI service unavailable."
+
+        # Initial event for clients that track stream lifecycle.
+        yield "event: start\ndata: {}\n\n"
+
+        # Stream with preserved whitespace boundaries.
+        for token in re.findall(r"\S+\s*", answer):
+            payload = json.dumps({"token": token}, ensure_ascii=False)
+            yield f"event: token\ndata: {payload}\n\n"
+
+        final_payload = json.dumps(
+            {
+                "answer": answer,
+                "kpis": result.get("kpis", []),
+                "charts": result.get("charts", []),
+            },
+            default=str,
+            ensure_ascii=False,
+        )
+        yield f"event: done\ndata: {final_payload}\n\n"
+
+    except Exception as e:
+        logger.error(f"[AI_SERVICES][STREAM] Error: {e}", exc_info=True)
+        err_payload = json.dumps({"error": "Chat service unavailable"}, ensure_ascii=False)
+        yield f"event: error\ndata: {err_payload}\n\n"

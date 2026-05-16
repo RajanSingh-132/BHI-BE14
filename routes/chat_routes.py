@@ -12,10 +12,11 @@ import uuid
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from models import ChatRequest
 from utils.request_tracker import tracker
-from services.ai_services import generate_ai_response
+from services.ai_services import generate_ai_response, generate_ai_response_stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -138,3 +139,139 @@ async def summary_chat(req: ChatRequest, request: Request):
     except Exception as e:
         logger.error(f"[SUMMARY-CHAT] Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Chat service unavailable")
+
+
+@router.post("/leads-chat-stream")
+async def leads_chat_stream(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        context      = "leads"
+        conversation_history = req.chat_history[:-1]
+
+        stream = generate_ai_response_stream(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logger.error(f"[LEADS-CHAT-STREAM] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat stream unavailable")
+
+
+@router.post("/sales-chat-stream")
+async def sales_chat_stream(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        context      = "Sales"
+        conversation_history = req.chat_history[:-1]
+
+        stream = generate_ai_response_stream(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logger.error(f"[SALES-CHAT-STREAM] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat stream unavailable")
+
+
+@router.post("/productivity-chat-stream")
+async def productivity_chat_stream(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        context      = "Productivity"
+        conversation_history = req.chat_history[:-1]
+
+        stream = generate_ai_response_stream(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logger.error(f"[PROD-CHAT-STREAM] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat stream unavailable")
+
+
+@router.post("/summary-chat-stream")
+async def summary_chat_stream(req: ChatRequest, request: Request):
+    try:
+        tracker.api_hit()
+        if not req.chat_history:
+            raise HTTPException(status_code=400, detail="Chat history empty")
+        user_message = req.chat_history[-1].content.strip()
+        session_id   = _get_session_id(request)
+        context      = "Summary"
+        conversation_history = req.chat_history[:-1]
+
+        stream = generate_ai_response_stream(
+            session_id=session_id,
+            message=user_message,
+            history=conversation_history,
+            request=request,
+            context=context,
+            dashboard_summary=req.dashboard_summary,
+            chat_mode=True,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logger.error(f"[SUMMARY-CHAT-STREAM] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat stream unavailable")
